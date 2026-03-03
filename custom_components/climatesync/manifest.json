@@ -1,0 +1,12 @@
+{
+  "domain": "climatesync",
+  "name": "ClimateSync",
+  "version": "1.0.0",
+  "documentation": "https://github.com/Patrick1610/ClimateSync",
+  "issue_tracker": "https://github.com/Patrick1610/ClimateSync/issues",
+  "codeowners": ["@Patrick1610"],
+  "requirements": [],
+  "dependencies": [],
+  "iot_class": "local_push",
+  "config_flow": true
+}

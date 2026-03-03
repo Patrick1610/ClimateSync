@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ClimateSync – Stap 1: Bronkamers",
+        "description": "Selecteer één of meer klimaatentiteiten (kamers) waarvan ClimateSync de warmtevraag bewaakt. Elke kamer moet een huidige temperatuur en een doeltemperatuur hebben.",
+        "data": {
+          "source_entities": "Bron-klimaatentiteiten (kamers)"
+        }
+      },
+      "destination": {
+        "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
+        "description": "Selecteer de thermostaat die ClimateSync bestuurt. De **rusttemperatuur** wordt gebruikt als geen enkele kamer verwarming nodig heeft. De **afrondingsmodus** bepaalt hoe het setpoint wordt afgerond voordat het wordt verzonden.",
+        "data": {
+          "destination_entity": "Bestemmings-thermostaat",
+          "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
+          "rounding_mode": "Afrondingsmodus voor het setpoint"
+        }
+      }
+    },
+    "error": {
+      "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_destination": "Selecteer een bestemmings-thermostaat.",
+      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ClimateSync – Stap 1: Bronkamers",
+        "description": "Wijzig welke klimaatentiteiten (kamers) ClimateSync bewaakt voor warmtevraag.",
+        "data": {
+          "source_entities": "Bron-klimaatentiteiten (kamers)"
+        }
+      },
+      "destination": {
+        "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
+        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Hersynchronisatie-interval**: hoe vaak ClimateSync controleert ook zonder wijzigingen. **Minimale wijzigingsdrempel**: kleinste setpointwijziging die de moeite waard is om te verzenden. **Minimaal verzendinterval**: minimale seconden tussen twee serviceaanroepen (snelheidsbegrenzer).",
+        "data": {
+          "destination_entity": "Bestemmings-thermostaat",
+          "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
+          "rounding_mode": "Afrondingsmodus voor het setpoint",
+          "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
+          "min_change_threshold": "Minimale wijzigingsdrempel (°C)",
+          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
+        }
+      }
+    },
+    "error": {
+      "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_destination": "Selecteer een bestemmings-thermostaat.",
+      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn."
+    }
+  },
+  "selector": {
+    "rounding_mode": {
+      "options": {
+        "half_step": "0,5 stappen (bijv. 19,0 – 19,5 – 20,0)",
+        "1_decimal": "1 decimaal (bijv. 19,0 – 19,3 – 19,7)",
+        "2_decimals": "2 decimalen (bijv. 19,00 – 19,33 – 19,67)"
+      }
+    }
+  }
+}
