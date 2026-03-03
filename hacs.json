@@ -1,0 +1,6 @@
+{
+  "name": "ClimateSync",
+  "hacs": "2",
+  "homeassistant": "2024.1.0",
+  "filename": "climatesync.zip"
+}

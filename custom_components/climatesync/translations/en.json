@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ClimateSync – Source Rooms",
+        "description": "Select the climate entities (rooms) whose temperatures will be used to compute the heating demand.",
+        "data": {
+          "source_entities": "Source climate entities"
+        }
+      },
+      "destination": {
+        "title": "ClimateSync – Destination",
+        "description": "Select the thermostat that ClimateSync will control, and configure basic settings.",
+        "data": {
+          "destination_entity": "Destination climate entity",
+          "idle_temperature": "Idle temperature (°C)",
+          "rounding_mode": "Rounding mode"
+        }
+      }
+    },
+    "error": {
+      "no_sources": "Please select at least one source climate entity.",
+      "no_destination": "Please select a destination climate entity.",
+      "dest_is_source": "The destination entity cannot be one of the source entities."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ClimateSync – Options",
+        "data": {
+          "idle_temperature": "Idle temperature (°C)",
+          "rounding_mode": "Rounding mode",
+          "resync_interval_seconds": "Resync interval (seconds)",
+          "min_change_threshold": "Minimum change threshold (°C)",
+          "min_send_interval_seconds": "Minimum send interval (seconds)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "rounding_mode": {
+      "options": {
+        "half_step": "0.5 steps",
+        "1_decimal": "1 decimal",
+        "2_decimals": "2 decimals"
+      }
+    }
+  }
+}

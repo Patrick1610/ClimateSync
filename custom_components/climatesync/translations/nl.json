@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ClimateSync – Bronkamers",
+        "description": "Selecteer de klimaatentiteiten (kamers) waarvan de temperaturen worden gebruikt voor de warmtevraagberekening.",
+        "data": {
+          "source_entities": "Bron-klimaatentiteiten"
+        }
+      },
+      "destination": {
+        "title": "ClimateSync – Bestemming",
+        "description": "Selecteer de thermostaat die ClimateSync bestuurt en stel de basisinstellingen in.",
+        "data": {
+          "destination_entity": "Bestemmings-klimaatentiteit",
+          "idle_temperature": "Rusttemperatuur (°C)",
+          "rounding_mode": "Afrondingsmodus"
+        }
+      }
+    },
+    "error": {
+      "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_destination": "Selecteer een bestemmings-klimaatentiteit.",
+      "dest_is_source": "De bestemmingsentiteit mag niet een van de bronentiteiten zijn."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ClimateSync – Opties",
+        "data": {
+          "idle_temperature": "Rusttemperatuur (°C)",
+          "rounding_mode": "Afrondingsmodus",
+          "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
+          "min_change_threshold": "Minimale wijzigingsdrempel (°C)",
+          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "rounding_mode": {
+      "options": {
+        "half_step": "0,5 stappen",
+        "1_decimal": "1 decimaal",
+        "2_decimals": "2 decimalen"
+      }
+    }
+  }
+}
