@@ -129,8 +129,12 @@ class ClimateSyncCoordinator:
         data = self.entry.data
         opts = self.entry.options
 
-        self._source_entities = list(data.get(CONF_SOURCE_ENTITIES, []))
-        self._destination_entity = data.get(CONF_DESTINATION_ENTITY, "")
+        self._source_entities = list(
+            opts.get(CONF_SOURCE_ENTITIES, data.get(CONF_SOURCE_ENTITIES, []))
+        )
+        self._destination_entity = opts.get(
+            CONF_DESTINATION_ENTITY, data.get(CONF_DESTINATION_ENTITY, "")
+        )
 
         # Options override data for shared keys
         self._idle_temperature = float(

@@ -52,17 +52,21 @@ Select one or more **climate entities** that represent the rooms whose heating d
 | Idle temperature | 5.0 °C | Target temperature sent to the destination when no room has a positive delta (all rooms are at or above their target). |
 | Rounding mode | 1 decimal | How the computed setpoint is rounded before being sent. |
 
-### Options Flow (advanced)
+### Options Flow — reconfigure everything via the settings gear
 
-After setup, open the integration → **Configure** to adjust:
+After setup, open the integration → **Configure** (⚙ gear icon) to get the same 2-step wizard again. You can change:
+
+- **Step 1**: add or remove source rooms
+- **Step 2**: change the destination thermostat, idle temperature, rounding mode, and advanced options:
 
 | Option | Default | Description |
 |---|---|---|
-| Idle temperature | 5.0 °C | See above. |
-| Rounding mode | 1 decimal | See below. |
-| Resync interval | 60 s | How often to force-evaluate even without state changes. |
-| Minimum change threshold | 0.2 °C | Anti-flap: only send a new setpoint if it differs by more than this. |
-| Minimum send interval | 10 s | Rate limit: at most one service call per this many seconds. |
+| Destination thermostat | — | Change which thermostat is controlled. |
+| Idle temperature | 5.0 °C | Temperature sent when no room needs heating. |
+| Rounding mode | 1 decimal | How setpoints are rounded. |
+| Resync interval | 60 s | How often ClimateSync checks even without state changes. |
+| Minimum change threshold | 0.2 °C | Only send a new setpoint if the change exceeds this. |
+| Minimum send interval | 10 s | At most one service call per this many seconds. |
 
 ---
 
