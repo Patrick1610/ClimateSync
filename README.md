@@ -149,7 +149,6 @@ One sensor per source climate entity.
 | State | Meaning |
 |---|---|
 | `ok` | Everything is in sync, no issues. |
-| `resync_needed` | A periodic resync was triggered (normal, informational). |
 | `rate_limited` | A setpoint update was suppressed because the last call was too recent. |
 | `destination_unavailable` | The destination climate entity is unavailable or unknown. |
 | `missing_source_data` | One or more source entities have missing/unavailable temperature attributes. The integration continues with delta = 0 for those rooms. |
@@ -166,9 +165,13 @@ One sensor per source climate entity.
 | `last_applied_setpoint` | What was last actually sent to the destination |
 | `current_destination_target` | The destination's actual `temperature` attribute right now |
 | `mismatch_seconds` | How long (seconds) the desired and actual setpoint have been diverging |
+| `mismatch_since` | ISO timestamp of when the mismatch started (null when in sync) |
 | `resync_count` | Number of periodic resyncs since startup |
 | `apply_attempts` | Total service call attempts since startup |
 | `apply_failures` | Total service call failures since startup |
+| `evaluation_count` | Total evaluation cycles since startup |
+| `skipped_anti_flap` | Times a setpoint update was skipped because the change was within the threshold |
+| `skipped_rate_limit` | Times a setpoint update was skipped due to rate limiting |
 | `last_error` | Last exception message, if any |
 
 ---

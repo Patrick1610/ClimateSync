@@ -258,8 +258,14 @@ class StatusSensor(_ClimateSyncBaseSensor):
             "last_applied_setpoint": coord.last_applied_setpoint,
             "current_destination_target": coord.destination_current_target,
             "mismatch_seconds": round(coord.mismatch_seconds, 1),
+            "mismatch_since": (
+                coord.mismatch_since.isoformat() if coord.mismatch_since else None
+            ),
             "resync_count": coord.resync_count,
             "apply_attempts": coord.apply_attempts,
             "apply_failures": coord.apply_failures,
+            "evaluation_count": coord.evaluation_count,
+            "skipped_anti_flap": coord.skipped_anti_flap,
+            "skipped_rate_limit": coord.skipped_rate_limit,
             "last_error": coord.last_error,
         }
