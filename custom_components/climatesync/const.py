@@ -24,7 +24,6 @@ ROUNDING_MODES = [ROUNDING_MODE_HALF, ROUNDING_MODE_1DEC, ROUNDING_MODE_2DEC]
 
 # Status states for sensor.climatesync_status
 STATUS_OK = "ok"
-STATUS_RESYNC_NEEDED = "resync_needed"
 STATUS_RATE_LIMITED = "rate_limited"
 STATUS_DESTINATION_UNAVAILABLE = "destination_unavailable"
 STATUS_MISSING_SOURCE_DATA = "missing_source_data"

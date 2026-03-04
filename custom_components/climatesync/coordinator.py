@@ -1,9 +1,7 @@
 """ClimateSync coordinator: delta algorithm, anti-flap, rate limiting, resync."""
 from __future__ import annotations
 
-import asyncio
 import logging
-import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -37,7 +35,6 @@ from .const import (
     STATUS_MISSING_SOURCE_DATA,
     STATUS_OK,
     STATUS_RATE_LIMITED,
-    STATUS_RESYNC_NEEDED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,7 +59,9 @@ def _apply_rounding(value: float, mode: str) -> float:
         return round(value * 2) / 2
     if mode == ROUNDING_MODE_2DEC:
         return round(value, 2)
-    # Default: 1 decimal
+    if mode == ROUNDING_MODE_1DEC:
+        return round(value, 1)
+    # Fallback for unknown modes: 1 decimal
     return round(value, 1)
 
 

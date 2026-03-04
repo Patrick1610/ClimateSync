@@ -364,3 +364,89 @@ async def test_apply_failed_takes_priority_over_rate_limited():
 
     await coord._async_evaluate()
     assert coord.status == STATUS_APPLY_FAILED
+
+
+# ---------------------------------------------------------------------------
+# Additional edge-case tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_destination_unavailable_sets_status():
+    """STATUS_DESTINATION_UNAVAILABLE when destination entity is unavailable."""
+    coord, hass = _build_coordinator()
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable"),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.status == "destination_unavailable"
+    # Service call should NOT have been attempted
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_destination_missing_sets_status():
+    """STATUS_DESTINATION_UNAVAILABLE when destination entity does not exist."""
+    coord, hass = _build_coordinator()
+
+    # Destination entity returns None (not in HA state machine)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.status == "destination_unavailable"
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resync_increments_count():
+    """Periodic resync callback increments resync_count and triggers evaluation."""
+    coord, hass = _build_coordinator()
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.0),
+    })
+
+    assert coord.resync_count == 0
+    coord._async_resync(None)
+    assert coord.resync_count == 1
+    coord._async_resync(None)
+    assert coord.resync_count == 2
+
+    # Verify async_create_task was called (evaluation triggered)
+    assert hass.async_create_task.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_resync_skipped_when_apply_failed():
+    """Resync should NOT trigger evaluation when status is APPLY_FAILED."""
+    coord, hass = _build_coordinator()
+
+    coord.status = STATUS_APPLY_FAILED
+    coord._async_resync(None)
+    assert coord.resync_count == 1
+    # async_create_task should NOT have been called
+    hass.async_create_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_idle_temperature_when_no_demand():
+    """When all rooms are satisfied (delta ≤ 0), destination gets idle temperature."""
+    coord, hass = _build_coordinator(idle_temperature=5.0)
+
+    # Room is already at target → delta = 0
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=22.0, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=20.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == 5.0
+    assert coord.delta_max == 0.0
