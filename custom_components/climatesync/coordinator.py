@@ -26,7 +26,6 @@ from .const import (
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_MODE,
-    ROUNDING_MODE_1DEC,
     ROUNDING_MODE_2DEC,
     ROUNDING_MODE_HALF,
     STATUS_APPLY_FAILED,
@@ -59,9 +58,7 @@ def _apply_rounding(value: float, mode: str) -> float:
         return round(value * 2) / 2
     if mode == ROUNDING_MODE_2DEC:
         return round(value, 2)
-    if mode == ROUNDING_MODE_1DEC:
-        return round(value, 1)
-    # Fallback for unknown modes: 1 decimal
+    # Default / ROUNDING_MODE_1DEC
     return round(value, 1)
 
 

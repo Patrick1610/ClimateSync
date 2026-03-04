@@ -371,7 +371,7 @@ async def test_apply_failed_takes_priority_over_rate_limited():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_destination_unavailable_sets_status():
+async def test_destination_unavailable_when_state_unavailable():
     """STATUS_DESTINATION_UNAVAILABLE when destination entity is unavailable."""
     coord, hass = _build_coordinator()
 
@@ -388,7 +388,7 @@ async def test_destination_unavailable_sets_status():
 
 
 @pytest.mark.asyncio
-async def test_destination_missing_sets_status():
+async def test_destination_unavailable_when_entity_missing():
     """STATUS_DESTINATION_UNAVAILABLE when destination entity does not exist."""
     coord, hass = _build_coordinator()
 
