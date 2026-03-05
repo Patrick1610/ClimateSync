@@ -53,19 +53,24 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = []
 
+    # Computed setpoint sensor (sorted first via "1." prefix)
+    entities.append(DestinationSetpointSensor(coordinator, entry, device_info))
+
+    # Max delta sensor (sorted second via "2." prefix)
+    entities.append(MaxDeltaSensor(coordinator, entry, device_info))
+
     # Per-room delta sensors
     for source in coordinator.source_entities:
         entities.append(
             RoomDeltaSensor(coordinator, entry, source, device_info)
         )
 
-    # Max delta sensor
-    entities.append(MaxDeltaSensor(coordinator, entry, device_info))
+    # Destination current target sensor
+    entities.append(
+        DestinationCurrentTargetSensor(coordinator, entry, device_info)
+    )
 
-    # Computed setpoint sensor
-    entities.append(DestinationSetpointSensor(coordinator, entry, device_info))
-
-    # Status sensor
+    # Status sensor (diagnostic)
     entities.append(StatusSensor(coordinator, entry, device_info))
 
     async_add_entities(entities)
@@ -75,7 +80,6 @@ class _ClimateSyncBaseSensor(SensorEntity):
     """Base class for ClimateSync sensors."""
 
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
@@ -153,7 +157,7 @@ class MaxDeltaSensor(_ClimateSyncBaseSensor):
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_name = "Delta Max"
+    _attr_name = "2. Delta Max"
 
     def __init__(
         self,
@@ -189,7 +193,7 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_name = "Destination Setpoint"
+    _attr_name = "1. Destination Setpoint"
 
     def __init__(
         self,
@@ -219,9 +223,44 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
         }
 
 
+class DestinationCurrentTargetSensor(_ClimateSyncBaseSensor):
+    """Sensor reporting the current target temperature of the destination."""
+
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_name = "Destination Current Target"
+
+    def __init__(
+        self,
+        coordinator: ClimateSyncCoordinator,
+        entry: ConfigEntry,
+        device_info: DeviceInfo,
+    ) -> None:
+        """Initialise destination current target sensor."""
+        super().__init__(coordinator, entry, device_info)
+        self._attr_unique_id = _entry_unique_id(
+            entry.entry_id, "destination_current_target"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current target temperature of the destination."""
+        return self._coordinator.destination_current_target
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return destination context."""
+        return {
+            "destination_entity_id": self._coordinator.destination_entity,
+            "destination_current_temperature": self._coordinator.destination_current_temperature,
+        }
+
+
 class StatusSensor(_ClimateSyncBaseSensor):
     """Diagnostic status sensor for ClimateSync."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_name = "Status"
 
     def __init__(

@@ -7,6 +7,18 @@
 
 ClimateSync is a HACS-ready Home Assistant custom integration that implements **delta-based thermostat synchronisation**. It reads the heating demand (delta between target and current temperature) from multiple source climate entities (rooms) and drives a single destination thermostat by continuously adjusting its target temperature.
 
+### Why delta-based instead of copying the highest setpoint?
+
+Instead of simply syncing the highest source setpoint to the destination, ClimateSync uses the **maximum delta** (largest gap between target and current temperature across all rooms) and adds it to the **destination's own current temperature**:
+
+```
+destination_target = destination_current_temperature + delta_max
+```
+
+This approach was designed with the **Plugwise Emma** in mind. The Emma is connected to the central-heating boiler (CV) over **OpenTherm** and internally calculates a desired CV water temperature based on its own current delta. By feeding the Emma the home-wide maximum delta on top of its own measured temperature, ClimateSync lets the Emma function as a full OpenTherm controller — it sees the "hardest working" room's demand and adjusts the boiler modulation accordingly.
+
+Even without an Emma, this delta-based method is more accurate than copying setpoints because it accounts for how far the destination already is from equilibrium.
+
 ---
 
 ## Features
@@ -82,9 +94,15 @@ For each source climate entity (room):
 delta_max = max(all room deltas)
 
 If delta_max <= 0:
-    setpoint_raw = idle_temperature
+    setpoint_raw = idle_temperature        # No room needs heating
 Else:
     setpoint_raw = destination_current_temperature + delta_max
+    # The destination target is set to its own current temperature
+    # plus the largest demand across all source rooms. This means the
+    # destination "feels" the same heating gap as the hardest-working
+    # room, which is critical for OpenTherm controllers like the
+    # Plugwise Emma that modulate boiler output based on their own
+    # observed delta.
 
 setpoint_final = round(setpoint_raw, rounding_mode)
 
@@ -103,11 +121,35 @@ If abs(destination_current_target - setpoint_final) > min_change_threshold:
 
 ---
 
-## Diagnostic Entities
+## Entities
 
-All entities are attached to a **ClimateSync** device and are classified as *diagnostic*.
+All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas, destination target) are regular entities; the status sensor is classified as *diagnostic*.
 
-### Per-room delta sensors — `sensor.climatesync_delta_<slug>`
+### Sensors
+
+#### Computed setpoint — `sensor.climatesync_1_destination_setpoint`
+
+| Attribute | Description |
+|---|---|
+| `destination_entity_id` | The controlled thermostat |
+| `destination_current_temperature` | Current measured temperature at destination |
+| `destination_current_target` | Current target temperature at destination |
+| `delta_max` | Max delta used for this computation |
+| `rounding_mode` | Active rounding mode |
+| `idle_temperature` | Configured idle temperature |
+
+**State**: the rounded setpoint that ClimateSync wants to apply (`destination_current_temperature + delta_max`, rounded).
+
+#### Max delta — `sensor.climatesync_2_delta_max`
+
+| Attribute | Description |
+|---|---|
+| `room_deltas` | Map of `{entity_id: delta}` for all rooms |
+| `leading_room` | Entity id of the room with the highest delta |
+
+**State**: the maximum delta across all rooms.
+
+#### Per-room delta sensors — `sensor.climatesync_delta_<slug>`
 
 One sensor per source climate entity.
 
@@ -120,29 +162,20 @@ One sensor per source climate entity.
 
 **State**: `max(raw_delta, 0)` — the effective heating demand for this room.
 
-### Max delta — `sensor.climatesync_delta_max`
+#### Destination current target — `sensor.climatesync_destination_current_target`
 
-| Attribute | Description |
-|---|---|
-| `room_deltas` | Map of `{entity_id: delta}` for all rooms |
-| `leading_room` | Entity id of the room with the highest delta |
-
-**State**: the maximum delta across all rooms.
-
-### Computed setpoint — `sensor.climatesync_destination_setpoint`
+Shows the destination thermostat's actual current target temperature in real time, making it easy to compare against the computed setpoint without switching to the destination device.
 
 | Attribute | Description |
 |---|---|
 | `destination_entity_id` | The controlled thermostat |
 | `destination_current_temperature` | Current measured temperature at destination |
-| `destination_current_target` | Current target temperature at destination |
-| `delta_max` | Max delta used for this computation |
-| `rounding_mode` | Active rounding mode |
-| `idle_temperature` | Configured idle temperature |
 
-**State**: the rounded setpoint that ClimateSync wants to apply.
+**State**: the destination's current `temperature` attribute (its active target).
 
-### Status — `sensor.climatesync_status` *(most important)*
+### Diagnostic
+
+#### Status — `sensor.climatesync_status` *(most important)*
 
 **States:**
 
