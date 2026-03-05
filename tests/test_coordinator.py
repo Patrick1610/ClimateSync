@@ -450,3 +450,74 @@ async def test_idle_temperature_when_no_demand():
 
     assert coord.computed_setpoint == 5.0
     assert coord.delta_max == 0.0
+
+
+# ---------------------------------------------------------------------------
+# State-change filtering tests
+# ---------------------------------------------------------------------------
+
+def _make_event(old_state: MagicMock | None, new_state: MagicMock | None) -> MagicMock:
+    """Return a mock state_changed event."""
+    event = MagicMock()
+    event.data = {"old_state": old_state, "new_state": new_state}
+    return event
+
+
+class TestHasRelevantChange:
+    """Tests for _has_relevant_change static method."""
+
+    def test_new_entity_added(self):
+        """Evaluate when entity is newly added (old_state is None)."""
+        new = _make_state(current_temperature=20.0, target_temperature=22.0)
+        event = _make_event(None, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_entity_removed(self):
+        """Evaluate when entity is removed (new_state is None)."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0)
+        event = _make_event(old, None)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_main_state_changed(self):
+        """Evaluate when main state changes (e.g. heat → off)."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0, state="heat")
+        new = _make_state(current_temperature=20.0, target_temperature=22.0, state="off")
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_current_temperature_changed(self):
+        """Evaluate when current_temperature changes."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0)
+        new = _make_state(current_temperature=20.5, target_temperature=22.0)
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_target_temperature_changed(self):
+        """Evaluate when target temperature changes."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0)
+        new = _make_state(current_temperature=20.0, target_temperature=23.0)
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_irrelevant_attribute_change_ignored(self):
+        """Skip evaluation when only non-temperature attributes change."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0)
+        old.attributes["hvac_action"] = "heating"
+        new = _make_state(current_temperature=20.0, target_temperature=22.0)
+        new.attributes["hvac_action"] = "idle"
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is False
+
+    def test_no_change_at_all(self):
+        """Skip evaluation when nothing changed."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0)
+        new = _make_state(current_temperature=20.0, target_temperature=22.0)
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is False
+
+    def test_unavailable_state_triggers_evaluation(self):
+        """Evaluate when entity becomes unavailable."""
+        old = _make_state(current_temperature=20.0, target_temperature=22.0, state="heat")
+        new = _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable")
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True

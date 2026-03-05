@@ -160,6 +160,36 @@ class ClimateSyncCoordinator:
         self._teardown_listeners()
         self._setup_listeners()
 
+    @staticmethod
+    def _has_relevant_change(event: Any) -> bool:
+        """Return True when temperature-relevant attributes changed.
+
+        Only ``current_temperature``, ``temperature`` (target), and the main
+        entity state (e.g. heat → off, unavailable) are considered relevant.
+        Other attribute changes (hvac_action, preset_mode, …) are ignored so
+        that integrations like Versatile Thermostat, which forward many TRV
+        attribute updates, do not trigger unnecessary evaluations.
+        """
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+
+        # Entity added or removed — always evaluate
+        if old_state is None or new_state is None:
+            return True
+
+        # Main state changed (e.g. heat → off, unavailable)
+        if old_state.state != new_state.state:
+            return True
+
+        _ATTRS = ("current_temperature", "temperature")
+        old_attrs = old_state.attributes
+        new_attrs = new_state.attributes
+        for attr in _ATTRS:
+            if old_attrs.get(attr) != new_attrs.get(attr):
+                return True
+
+        return False
+
     def _setup_listeners(self) -> None:
         """Register state-change listeners and periodic resync."""
         if not self._source_entities and not self._destination_entity:
@@ -171,7 +201,8 @@ class ClimateSyncCoordinator:
 
         @callback
         def _handle_state_change(event: Any) -> None:
-            self.hass.async_create_task(self._async_evaluate())
+            if self._has_relevant_change(event):
+                self.hass.async_create_task(self._async_evaluate())
 
         self._unsub_state_listeners = [
             async_track_state_change_event(
