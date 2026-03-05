@@ -1,7 +1,7 @@
 {
   "domain": "climatesync",
   "name": "ClimateSync",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "documentation": "https://github.com/Patrick1610/ClimateSync",
   "issue_tracker": "https://github.com/Patrick1610/ClimateSync/issues",
   "codeowners": ["@Patrick1610"],
