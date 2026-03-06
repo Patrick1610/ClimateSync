@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -55,7 +56,12 @@ def _safe_float(value: Any) -> float | None:
 def _apply_rounding(value: float, mode: str) -> float:
     """Apply a rounding mode to a temperature value."""
     if mode == ROUNDING_MODE_HALF:
-        return round(value * 2) / 2
+        # Round UP to the nearest 0.5 so the setpoint is always high enough to
+        # trigger heating.  Standard rounding could silently floor a small delta
+        # (e.g. 19.2 → 19.0) and leave the destination thermostat below its own
+        # activation threshold.  The inner round(..., 9) eliminates floating-point
+        # noise so that exact multiples of 0.5 stay unchanged (19.0 → 19.0).
+        return math.ceil(round(value * 2, 9)) / 2
     if mode == ROUNDING_MODE_2DEC:
         return round(value, 2)
     # Default / ROUNDING_MODE_1DEC
