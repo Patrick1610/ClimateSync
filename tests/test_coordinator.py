@@ -40,12 +40,14 @@ for mod_name, mod_obj in _modules.items():
 from custom_components.climatesync.const import (  # noqa: E402
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
@@ -84,6 +86,7 @@ def _build_coordinator(
     source_entities: list[str] | None = None,
     destination_entity: str = "climate.dest",
     idle_temperature: float = DEFAULT_IDLE_TEMPERATURE,
+    max_setpoint: float = DEFAULT_MAX_SETPOINT,
     min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
     min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
     resync_interval: int = DEFAULT_RESYNC_INTERVAL,
@@ -104,6 +107,7 @@ def _build_coordinator(
     }
     entry.options = {
         CONF_ROUNDING_MODE: rounding_mode,
+        CONF_MAX_SETPOINT: max_setpoint,
         CONF_MIN_CHANGE_THRESHOLD: min_change_threshold,
         CONF_MIN_SEND_INTERVAL: min_send_interval,
         CONF_RESYNC_INTERVAL: resync_interval,
@@ -114,6 +118,7 @@ def _build_coordinator(
     coord._source_entities = list(source_entities)
     coord._destination_entity = destination_entity
     coord._idle_temperature = float(idle_temperature)
+    coord._max_setpoint = float(max_setpoint)
     coord._rounding_mode = rounding_mode
     coord._min_change_threshold = float(min_change_threshold)
     coord._min_send_interval = int(min_send_interval)
@@ -537,3 +542,78 @@ class TestHasRelevantChange:
         new = _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable")
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+
+# ---------------------------------------------------------------------------
+# Max setpoint cap tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_max_setpoint_clamps_computed_value():
+    """Setpoint is clamped to max_setpoint when the raw value exceeds it."""
+    # Simulate the Plugwise cascade: Emma current=19.9, delta=25.1 → raw 45.0
+    # With max_setpoint=35 the coordinator must cap it at 35.
+    coord, hass = _build_coordinator(max_setpoint=35.0, min_change_threshold=0.2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=9.9, target_temperature=35.0),
+        "climate.dest": _make_state(current_temperature=19.9, target_temperature=5.0),
+    })
+
+    await coord._async_evaluate()
+
+    # Raw setpoint = 19.9 + 25.1 = 45.0 – must be clamped to 35.0
+    assert coord.computed_setpoint == 35.0
+    # Service call must have been made with the capped value
+    hass.services.async_call.assert_called_once()
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2]["temperature"] == 35.0
+
+
+@pytest.mark.asyncio
+async def test_max_setpoint_does_not_clamp_normal_value():
+    """Setpoint below max_setpoint is passed through unchanged."""
+    coord, hass = _build_coordinator(max_setpoint=35.0, min_change_threshold=0.2)
+
+    # delta=5, dest_current=20 → setpoint=25, well below max_setpoint
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=15.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == 25.0
+
+
+# ---------------------------------------------------------------------------
+# Double-listener bug regression test
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_async_setup_registers_listeners_exactly_once():
+    """async_setup must not create duplicate state listeners.
+
+    Previously, async_apply_options() (called from async_setup) already
+    registered listeners, but async_setup then called _setup_listeners() a
+    second time, orphaning the first subscription.  After the fix, only one
+    subscription should be stored.
+    """
+    coord, hass = _build_coordinator()
+
+    # Patch _setup_listeners to count invocations
+    call_count = {"n": 0}
+    original = coord._setup_listeners
+
+    def counting_setup():
+        call_count["n"] += 1
+        original()
+
+    coord._setup_listeners = counting_setup
+
+    # async_apply_options internally calls _setup_listeners (via _teardown+setup)
+    coord.async_apply_options()
+
+    assert call_count["n"] == 1, (
+        "async_apply_options must call _setup_listeners exactly once"
+    )

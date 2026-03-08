@@ -13,12 +13,14 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
@@ -52,6 +54,7 @@ def _sources_schema(default_sources: list[str] | None = None) -> vol.Schema:
 def _destination_schema(
     default_dest: str | None = None,
     default_idle: float = DEFAULT_IDLE_TEMPERATURE,
+    default_max_setpoint: float = DEFAULT_MAX_SETPOINT,
     default_rounding: str = DEFAULT_ROUNDING_MODE,
     default_resync: int = DEFAULT_RESYNC_INTERVAL,
     default_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -71,6 +74,17 @@ def _destination_schema(
                 "number": {
                     "min": -10.0,
                     "max": 25.0,
+                    "step": 0.5,
+                    "mode": "box",
+                    "unit_of_measurement": "°C",
+                }
+            }
+        ),
+        vol.Required(CONF_MAX_SETPOINT, default=default_max_setpoint): selector.selector(
+            {
+                "number": {
+                    "min": 10.0,
+                    "max": 60.0,
                     "step": 0.5,
                     "mode": "box",
                     "unit_of_measurement": "°C",
@@ -183,6 +197,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_SOURCE_ENTITIES: self._source_entities,
                         CONF_DESTINATION_ENTITY: dest,
                         CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
+                        CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                         CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
                     },
                 )
@@ -260,6 +275,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                         CONF_SOURCE_ENTITIES: self._source_entities,
                         CONF_DESTINATION_ENTITY: dest,
                         CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
+                        CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                         CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
                         CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
                         CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
@@ -272,6 +288,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
             data_schema=_destination_schema(
                 default_dest=self._get(CONF_DESTINATION_ENTITY, None),
                 default_idle=self._get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+                default_max_setpoint=self._get(CONF_MAX_SETPOINT, DEFAULT_MAX_SETPOINT),
                 default_rounding=self._get(CONF_ROUNDING_MODE, DEFAULT_ROUNDING_MODE),
                 default_resync=self._get(CONF_RESYNC_INTERVAL, DEFAULT_RESYNC_INTERVAL),
                 default_threshold=self._get(

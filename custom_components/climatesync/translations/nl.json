@@ -10,10 +10,11 @@
       },
       "destination": {
         "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Selecteer de thermostaat die ClimateSync bestuurt. De **rusttemperatuur** wordt gebruikt als geen enkele kamer verwarming nodig heeft. De **afrondingsmodus** bepaalt hoe het setpoint wordt afgerond voordat het wordt verzonden.",
+        "description": "Selecteer de thermostaat die ClimateSync bestuurt. De **rusttemperatuur** wordt gebruikt als geen enkele kamer verwarming nodig heeft. Het **maximale setpoint** begrenst hoe hoog ClimateSync de bestemming ooit kan instellen (voorkomt ongewenste pieken). De **afrondingsmodus** bepaalt hoe het setpoint wordt afgerond voordat het wordt verzonden.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
+          "max_setpoint": "Maximaal setpoint (°C) – harde bovengrens voor het bestemmingssetpoint",
           "rounding_mode": "Afrondingsmodus voor het setpoint"
         }
       }
@@ -35,10 +36,11 @@
       },
       "destination": {
         "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Hersynchronisatie-interval**: hoe vaak ClimateSync controleert ook zonder wijzigingen. **Minimale wijzigingsdrempel**: kleinste setpointwijziging die de moeite waard is om te verzenden. **Minimaal verzendinterval**: minimale seconden tussen twee serviceaanroepen (snelheidsbegrenzer).",
+        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Maximaal setpoint**: harde bovengrens om ongewenste pieken te voorkomen. **Hersynchronisatie-interval**: hoe vaak ClimateSync controleert ook zonder wijzigingen. **Minimale wijzigingsdrempel**: kleinste setpointwijziging die de moeite waard is om te verzenden. **Minimaal verzendinterval**: minimale seconden tussen twee serviceaanroepen (snelheidsbegrenzer).",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
+          "max_setpoint": "Maximaal setpoint (°C) – harde bovengrens voor het bestemmingssetpoint",
           "rounding_mode": "Afrondingsmodus voor het setpoint",
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
           "min_change_threshold": "Minimale wijzigingsdrempel (°C)",

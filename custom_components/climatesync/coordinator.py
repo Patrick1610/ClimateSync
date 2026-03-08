@@ -17,12 +17,14 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
@@ -80,6 +82,7 @@ class ClimateSyncCoordinator:
         self._source_entities: list[str] = []
         self._destination_entity: str = ""
         self._idle_temperature: float = DEFAULT_IDLE_TEMPERATURE
+        self._max_setpoint: float = DEFAULT_MAX_SETPOINT
         self._rounding_mode: str = DEFAULT_ROUNDING_MODE
         self._resync_interval: int = DEFAULT_RESYNC_INTERVAL
         self._min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD
@@ -125,7 +128,6 @@ class ClimateSyncCoordinator:
     async def async_setup(self) -> None:
         """Set up coordinator, resolve config, register listeners."""
         self.async_apply_options()
-        self._setup_listeners()
         # Do initial calculation
         await self._async_evaluate()
 
@@ -146,6 +148,12 @@ class ClimateSyncCoordinator:
             opts.get(
                 CONF_IDLE_TEMPERATURE,
                 data.get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+            )
+        )
+        self._max_setpoint = float(
+            opts.get(
+                CONF_MAX_SETPOINT,
+                data.get(CONF_MAX_SETPOINT, DEFAULT_MAX_SETPOINT),
             )
         )
         self._rounding_mode = opts.get(
@@ -339,6 +347,17 @@ class ClimateSyncCoordinator:
                 setpoint_raw = dest_current + max_delta
 
         setpoint_final = _apply_rounding(setpoint_raw, self._rounding_mode)
+        # Clamp to the configured maximum setpoint.  This prevents a cascade
+        # where the destination propagates its new setpoint to source TRVs
+        # (e.g. Plugwise Adam), causing ClimateSync to compute an even higher
+        # setpoint on the very next evaluation.
+        if setpoint_final > self._max_setpoint:
+            _LOGGER.warning(
+                "ClimateSync: computed setpoint %.2f exceeds max_setpoint %.2f, clamping",
+                setpoint_final,
+                self._max_setpoint,
+            )
+            setpoint_final = self._max_setpoint
         self.computed_setpoint = setpoint_final
         self.last_desired_setpoint = setpoint_final
 
@@ -503,6 +522,11 @@ class ClimateSyncCoordinator:
     def idle_temperature(self) -> float:
         """Return idle temperature."""
         return self._idle_temperature
+
+    @property
+    def max_setpoint(self) -> float:
+        """Return maximum setpoint."""
+        return self._max_setpoint
 
     @property
     def rounding_mode(self) -> str:
