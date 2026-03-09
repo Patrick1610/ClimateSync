@@ -216,7 +216,15 @@ class ClimateSyncCoordinator:
         @callback
         def _handle_state_change(event: Any) -> None:
             if self._has_relevant_change(event):
-                self.hass.async_create_task(self._async_evaluate())
+                # When the destination itself changed its reported temperature
+                # after ClimateSync already set it (e.g. firmware compensation),
+                # bypass the rate limiter so the correction is applied immediately.
+                triggered_by_destination = (
+                    event.data.get("entity_id") == self._destination_entity
+                )
+                self.hass.async_create_task(
+                    self._async_evaluate(bypass_rate_limit=triggered_by_destination)
+                )
 
         self._unsub_state_listeners = [
             async_track_state_change_event(
@@ -249,7 +257,7 @@ class ClimateSyncCoordinator:
     # Evaluation
     # ------------------------------------------------------------------
 
-    async def _async_evaluate(self) -> None:
+    async def _async_evaluate(self, *, bypass_rate_limit: bool = False) -> None:
         """Compute deltas, setpoint, and apply if needed."""
         self.last_update_time = dt_util.utcnow()
         self.evaluation_count += 1
@@ -392,7 +400,7 @@ class ClimateSyncCoordinator:
         self.status = STATUS_OK
 
         # Apply setpoint
-        await self._async_apply_setpoint(setpoint_final)
+        await self._async_apply_setpoint(setpoint_final, bypass_rate_limit=bypass_rate_limit)
 
         # Determine final status: preserve apply-specific status, then layer on
         # evaluation-level statuses in priority order.
@@ -421,7 +429,9 @@ class ClimateSyncCoordinator:
         ):
             self.hass.async_create_task(self._async_evaluate())
 
-    async def _async_apply_setpoint(self, setpoint: float) -> None:
+    async def _async_apply_setpoint(
+        self, setpoint: float, *, bypass_rate_limit: bool = False
+    ) -> None:
         """Apply setpoint to destination if anti-flap and rate-limit allow."""
         current_target = self.destination_current_target
 
@@ -438,18 +448,27 @@ class ClimateSyncCoordinator:
                 )
                 return
 
-        # Rate limiting
+        # Rate limiting – skipped when the destination itself triggered the
+        # evaluation (firmware-side change that ClimateSync must correct).
         if self.last_service_call_time is not None:
             elapsed = (dt_util.utcnow() - self.last_service_call_time).total_seconds()
             if elapsed < self._min_send_interval:
-                self.skipped_rate_limit += 1
-                self.status = STATUS_RATE_LIMITED
-                _LOGGER.debug(
-                    "ClimateSync: skipped (rate-limit), elapsed=%.1fs min_interval=%ds",
-                    elapsed,
-                    self._min_send_interval,
-                )
-                return
+                if bypass_rate_limit:
+                    _LOGGER.debug(
+                        "ClimateSync: rate-limit bypassed (destination self-changed), "
+                        "elapsed=%.1fs min_interval=%ds",
+                        elapsed,
+                        self._min_send_interval,
+                    )
+                else:
+                    self.skipped_rate_limit += 1
+                    self.status = STATUS_RATE_LIMITED
+                    _LOGGER.debug(
+                        "ClimateSync: skipped (rate-limit), elapsed=%.1fs min_interval=%ds",
+                        elapsed,
+                        self._min_send_interval,
+                    )
+                    return
 
         self.apply_attempts += 1
         _LOGGER.debug(

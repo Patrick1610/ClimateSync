@@ -617,3 +617,80 @@ async def test_async_setup_registers_listeners_exactly_once():
     assert call_count["n"] == 1, (
         "async_apply_options must call _setup_listeners exactly once"
     )
+
+
+# ---------------------------------------------------------------------------
+# Destination-triggered rate-limit bypass tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_rate_limit_bypassed_when_destination_triggers_evaluation():
+    """When the destination itself changes its reported temperature, the rate
+    limiter must be bypassed so ClimateSync corrects the mismatch immediately.
+
+    Scenario mirrors the real-world Plugwise Emma 45°C incident:
+    1. ClimateSync sets Emma to 35°C (last_service_call_time = now).
+    2. Emma firmware autonomously reports 45°C ~2s later.
+    3. The destination state-change event triggers _async_evaluate with
+       bypass_rate_limit=True.
+    4. Despite only 2s elapsing (well within min_send_interval=60s), the
+       service call must still be made to push 35°C back.
+    """
+    coord, hass = _build_coordinator(
+        min_change_threshold=0.2,
+        min_send_interval=60,
+    )
+
+    # Step 1: simulate a prior service call recorded 2 seconds ago
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t2s = t0 + timedelta(seconds=2)
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t2s)
+        coord.last_service_call_time = t0  # last call was 2s ago
+
+        # Step 2: destination reports 45, but computed setpoint is 35
+        _configure_states(hass, {
+            "climate.room1": _make_state(current_temperature=19.7, target_temperature=35.0),
+            "climate.dest": _make_state(current_temperature=19.9, target_temperature=45.0),
+        })
+
+        # Step 3: evaluate as if triggered by the destination changing (bypass=True)
+        await coord._async_evaluate(bypass_rate_limit=True)
+
+    # Service call must have fired (rate limit bypassed)
+    assert hass.services.async_call.call_count == 1
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2]["temperature"] == 35.0
+
+    # skipped_rate_limit counter must NOT have been incremented
+    assert coord.skipped_rate_limit == 0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_still_applies_for_source_triggered_evaluation():
+    """Rate limiter must still apply when a source entity triggers the evaluation."""
+    coord, hass = _build_coordinator(
+        min_change_threshold=0.2,
+        min_send_interval=60,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t2s = t0 + timedelta(seconds=2)
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t2s)
+        coord.last_service_call_time = t0  # last call was 2s ago
+
+        _configure_states(hass, {
+            "climate.room1": _make_state(current_temperature=19.7, target_temperature=35.0),
+            "climate.dest": _make_state(current_temperature=19.9, target_temperature=20.0),
+        })
+
+        # Source-triggered evaluation (bypass=False, the default)
+        await coord._async_evaluate(bypass_rate_limit=False)
+
+    # Service call must NOT have fired (rate limited)
+    hass.services.async_call.assert_not_called()
+    assert coord.skipped_rate_limit == 1
+    assert coord.status == STATUS_RATE_LIMITED
