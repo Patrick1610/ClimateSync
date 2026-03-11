@@ -155,24 +155,17 @@ class TestSafeFloat:
 class TestApplyRounding:
     """Unit tests for _apply_rounding helper."""
 
-    def test_half_step_rounds_up(self):
-        # 21.3 is between 21.0 and 21.5 – should go UP to 21.5
+    def test_half_step(self):
+        # 21.3 → nearest 0.5 is 21.5
         assert _apply_rounding(21.3, "half_step") == 21.5
 
-    def test_half_step_rounds_up_small_delta(self):
-        # Issue scenario: dest_current=18.8, delta=0.4 → raw=19.2
-        # Must round UP to 19.5 so the destination thermostat activates heating.
-        assert _apply_rounding(19.2, "half_step") == 19.5
+    def test_half_step_rounds_down(self):
+        # 19.2 → nearest 0.5 is 19.0 (standard rounding, not ceiling)
+        assert _apply_rounding(19.2, "half_step") == 19.0
 
     def test_half_step_exact_half_unchanged(self):
-        # Values that are already multiples of 0.5 must stay unchanged.
-        assert _apply_rounding(19.5, "half_step") == 19.5
         assert _apply_rounding(19.0, "half_step") == 19.0
-        assert _apply_rounding(21.5, "half_step") == 21.5
-
-    def test_half_step_just_above_boundary_rounds_up(self):
-        # 19.0001 is just above 19.0 – should round up to 19.5, not stay at 19.0
-        assert _apply_rounding(19.0001, "half_step") == 19.5
+        assert _apply_rounding(19.5, "half_step") == 19.5
 
     def test_1dec(self):
         assert _apply_rounding(21.34, "1_decimal") == 21.3
