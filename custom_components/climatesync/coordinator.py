@@ -16,12 +16,14 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
@@ -74,6 +76,7 @@ class ClimateSyncCoordinator:
         self._source_entities: list[str] = []
         self._destination_entity: str = ""
         self._idle_temperature: float = DEFAULT_IDLE_TEMPERATURE
+        self._max_setpoint: float = DEFAULT_MAX_SETPOINT
         self._rounding_mode: str = DEFAULT_ROUNDING_MODE
         self._resync_interval: int = DEFAULT_RESYNC_INTERVAL
         self._min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD
@@ -119,7 +122,6 @@ class ClimateSyncCoordinator:
     async def async_setup(self) -> None:
         """Set up coordinator, resolve config, register listeners."""
         self.async_apply_options()
-        self._setup_listeners()
         # Do initial calculation
         await self._async_evaluate()
 
@@ -140,6 +142,12 @@ class ClimateSyncCoordinator:
             opts.get(
                 CONF_IDLE_TEMPERATURE,
                 data.get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+            )
+        )
+        self._max_setpoint = float(
+            opts.get(
+                CONF_MAX_SETPOINT,
+                data.get(CONF_MAX_SETPOINT, DEFAULT_MAX_SETPOINT),
             )
         )
         self._rounding_mode = opts.get(
@@ -202,7 +210,15 @@ class ClimateSyncCoordinator:
         @callback
         def _handle_state_change(event: Any) -> None:
             if self._has_relevant_change(event):
-                self.hass.async_create_task(self._async_evaluate())
+                # When the destination itself changed its reported temperature
+                # after ClimateSync already set it (e.g. firmware compensation),
+                # bypass the rate limiter so the correction is applied immediately.
+                triggered_by_destination = (
+                    event.data.get("entity_id") == self._destination_entity
+                )
+                self.hass.async_create_task(
+                    self._async_evaluate(bypass_rate_limit=triggered_by_destination)
+                )
 
         self._unsub_state_listeners = [
             async_track_state_change_event(
@@ -235,7 +251,7 @@ class ClimateSyncCoordinator:
     # Evaluation
     # ------------------------------------------------------------------
 
-    async def _async_evaluate(self) -> None:
+    async def _async_evaluate(self, *, bypass_rate_limit: bool = False) -> None:
         """Compute deltas, setpoint, and apply if needed."""
         self.last_update_time = dt_util.utcnow()
         self.evaluation_count += 1
@@ -333,6 +349,17 @@ class ClimateSyncCoordinator:
                 setpoint_raw = dest_current + max_delta
 
         setpoint_final = _apply_rounding(setpoint_raw, self._rounding_mode)
+        # Clamp to the configured maximum setpoint.  This prevents a cascade
+        # where the destination propagates its new setpoint to source TRVs
+        # (e.g. Plugwise Adam), causing ClimateSync to compute an even higher
+        # setpoint on the very next evaluation.
+        if setpoint_final > self._max_setpoint:
+            _LOGGER.warning(
+                "ClimateSync: computed setpoint %.2f exceeds max_setpoint %.2f, clamping",
+                setpoint_final,
+                self._max_setpoint,
+            )
+            setpoint_final = self._max_setpoint
         self.computed_setpoint = setpoint_final
         self.last_desired_setpoint = setpoint_final
 
@@ -367,7 +394,7 @@ class ClimateSyncCoordinator:
         self.status = STATUS_OK
 
         # Apply setpoint
-        await self._async_apply_setpoint(setpoint_final)
+        await self._async_apply_setpoint(setpoint_final, bypass_rate_limit=bypass_rate_limit)
 
         # Determine final status: preserve apply-specific status, then layer on
         # evaluation-level statuses in priority order.
@@ -396,7 +423,9 @@ class ClimateSyncCoordinator:
         ):
             self.hass.async_create_task(self._async_evaluate())
 
-    async def _async_apply_setpoint(self, setpoint: float) -> None:
+    async def _async_apply_setpoint(
+        self, setpoint: float, *, bypass_rate_limit: bool = False
+    ) -> None:
         """Apply setpoint to destination if anti-flap and rate-limit allow."""
         current_target = self.destination_current_target
 
@@ -413,18 +442,27 @@ class ClimateSyncCoordinator:
                 )
                 return
 
-        # Rate limiting
+        # Rate limiting – skipped when the destination itself triggered the
+        # evaluation (firmware-side change that ClimateSync must correct).
         if self.last_service_call_time is not None:
             elapsed = (dt_util.utcnow() - self.last_service_call_time).total_seconds()
             if elapsed < self._min_send_interval:
-                self.skipped_rate_limit += 1
-                self.status = STATUS_RATE_LIMITED
-                _LOGGER.debug(
-                    "ClimateSync: skipped (rate-limit), elapsed=%.1fs min_interval=%ds",
-                    elapsed,
-                    self._min_send_interval,
-                )
-                return
+                if bypass_rate_limit:
+                    _LOGGER.debug(
+                        "ClimateSync: rate-limit bypassed (destination self-changed), "
+                        "elapsed=%.1fs min_interval=%ds",
+                        elapsed,
+                        self._min_send_interval,
+                    )
+                else:
+                    self.skipped_rate_limit += 1
+                    self.status = STATUS_RATE_LIMITED
+                    _LOGGER.debug(
+                        "ClimateSync: skipped (rate-limit), elapsed=%.1fs min_interval=%ds",
+                        elapsed,
+                        self._min_send_interval,
+                    )
+                    return
 
         self.apply_attempts += 1
         _LOGGER.debug(
@@ -497,6 +535,11 @@ class ClimateSyncCoordinator:
     def idle_temperature(self) -> float:
         """Return idle temperature."""
         return self._idle_temperature
+
+    @property
+    def max_setpoint(self) -> float:
+        """Return maximum setpoint."""
+        return self._max_setpoint
 
     @property
     def rounding_mode(self) -> str:

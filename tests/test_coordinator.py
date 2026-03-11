@@ -40,12 +40,14 @@ for mod_name, mod_obj in _modules.items():
 from custom_components.climatesync.const import (  # noqa: E402
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
@@ -84,6 +86,7 @@ def _build_coordinator(
     source_entities: list[str] | None = None,
     destination_entity: str = "climate.dest",
     idle_temperature: float = DEFAULT_IDLE_TEMPERATURE,
+    max_setpoint: float = DEFAULT_MAX_SETPOINT,
     min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
     min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
     resync_interval: int = DEFAULT_RESYNC_INTERVAL,
@@ -104,6 +107,7 @@ def _build_coordinator(
     }
     entry.options = {
         CONF_ROUNDING_MODE: rounding_mode,
+        CONF_MAX_SETPOINT: max_setpoint,
         CONF_MIN_CHANGE_THRESHOLD: min_change_threshold,
         CONF_MIN_SEND_INTERVAL: min_send_interval,
         CONF_RESYNC_INTERVAL: resync_interval,
@@ -114,6 +118,7 @@ def _build_coordinator(
     coord._source_entities = list(source_entities)
     coord._destination_entity = destination_entity
     coord._idle_temperature = float(idle_temperature)
+    coord._max_setpoint = float(max_setpoint)
     coord._rounding_mode = rounding_mode
     coord._min_change_threshold = float(min_change_threshold)
     coord._min_send_interval = int(min_send_interval)
@@ -151,7 +156,16 @@ class TestApplyRounding:
     """Unit tests for _apply_rounding helper."""
 
     def test_half_step(self):
+        # 21.3 → nearest 0.5 is 21.5
         assert _apply_rounding(21.3, "half_step") == 21.5
+
+    def test_half_step_rounds_down(self):
+        # 19.2 → nearest 0.5 is 19.0 (standard rounding, not ceiling)
+        assert _apply_rounding(19.2, "half_step") == 19.0
+
+    def test_half_step_exact_half_unchanged(self):
+        assert _apply_rounding(19.0, "half_step") == 19.0
+        assert _apply_rounding(19.5, "half_step") == 19.5
 
     def test_1dec(self):
         assert _apply_rounding(21.34, "1_decimal") == 21.3
@@ -521,3 +535,155 @@ class TestHasRelevantChange:
         new = _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable")
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+
+# ---------------------------------------------------------------------------
+# Max setpoint cap tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_max_setpoint_clamps_computed_value():
+    """Setpoint is clamped to max_setpoint when the raw value exceeds it."""
+    # Simulate the Plugwise cascade: Emma current=19.9, delta=25.1 → raw 45.0
+    # With max_setpoint=35 the coordinator must cap it at 35.
+    coord, hass = _build_coordinator(max_setpoint=35.0, min_change_threshold=0.2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=9.9, target_temperature=35.0),
+        "climate.dest": _make_state(current_temperature=19.9, target_temperature=5.0),
+    })
+
+    await coord._async_evaluate()
+
+    # Raw setpoint = 19.9 + 25.1 = 45.0 – must be clamped to 35.0
+    assert coord.computed_setpoint == 35.0
+    # Service call must have been made with the capped value
+    hass.services.async_call.assert_called_once()
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2]["temperature"] == 35.0
+
+
+@pytest.mark.asyncio
+async def test_max_setpoint_does_not_clamp_normal_value():
+    """Setpoint below max_setpoint is passed through unchanged."""
+    coord, hass = _build_coordinator(max_setpoint=35.0, min_change_threshold=0.2)
+
+    # delta=5, dest_current=20 → setpoint=25, well below max_setpoint
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=15.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == 25.0
+
+
+# ---------------------------------------------------------------------------
+# Double-listener bug regression test
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_async_setup_registers_listeners_exactly_once():
+    """async_setup must not create duplicate state listeners.
+
+    Previously, async_apply_options() (called from async_setup) already
+    registered listeners, but async_setup then called _setup_listeners() a
+    second time, orphaning the first subscription.  After the fix, only one
+    subscription should be stored.
+    """
+    coord, hass = _build_coordinator()
+
+    # Patch _setup_listeners to count invocations
+    call_count = {"n": 0}
+    original = coord._setup_listeners
+
+    def counting_setup():
+        call_count["n"] += 1
+        original()
+
+    coord._setup_listeners = counting_setup
+
+    # async_apply_options internally calls _setup_listeners (via _teardown+setup)
+    coord.async_apply_options()
+
+    assert call_count["n"] == 1, (
+        "async_apply_options must call _setup_listeners exactly once"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Destination-triggered rate-limit bypass tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_rate_limit_bypassed_when_destination_triggers_evaluation():
+    """When the destination itself changes its reported temperature, the rate
+    limiter must be bypassed so ClimateSync corrects the mismatch immediately.
+
+    Scenario mirrors the real-world Plugwise Emma 45°C incident:
+    1. ClimateSync sets Emma to 35°C (last_service_call_time = now).
+    2. Emma firmware autonomously reports 45°C ~2s later.
+    3. The destination state-change event triggers _async_evaluate with
+       bypass_rate_limit=True.
+    4. Despite only 2s elapsing (well within min_send_interval=60s), the
+       service call must still be made to push 35°C back.
+    """
+    coord, hass = _build_coordinator(
+        min_change_threshold=0.2,
+        min_send_interval=60,
+    )
+
+    # Step 1: simulate a prior service call recorded 2 seconds ago
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t2s = t0 + timedelta(seconds=2)
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t2s)
+        coord.last_service_call_time = t0  # last call was 2s ago
+
+        # Step 2: destination reports 45, but computed setpoint is 35
+        _configure_states(hass, {
+            "climate.room1": _make_state(current_temperature=19.7, target_temperature=35.0),
+            "climate.dest": _make_state(current_temperature=19.9, target_temperature=45.0),
+        })
+
+        # Step 3: evaluate as if triggered by the destination changing (bypass=True)
+        await coord._async_evaluate(bypass_rate_limit=True)
+
+    # Service call must have fired (rate limit bypassed)
+    assert hass.services.async_call.call_count == 1
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2]["temperature"] == 35.0
+
+    # skipped_rate_limit counter must NOT have been incremented
+    assert coord.skipped_rate_limit == 0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_still_applies_for_source_triggered_evaluation():
+    """Rate limiter must still apply when a source entity triggers the evaluation."""
+    coord, hass = _build_coordinator(
+        min_change_threshold=0.2,
+        min_send_interval=60,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t2s = t0 + timedelta(seconds=2)
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t2s)
+        coord.last_service_call_time = t0  # last call was 2s ago
+
+        _configure_states(hass, {
+            "climate.room1": _make_state(current_temperature=19.7, target_temperature=35.0),
+            "climate.dest": _make_state(current_temperature=19.9, target_temperature=20.0),
+        })
+
+        # Source-triggered evaluation (bypass=False, the default)
+        await coord._async_evaluate(bypass_rate_limit=False)
+
+    # Service call must NOT have fired (rate limited)
+    hass.services.async_call.assert_not_called()
+    assert coord.skipped_rate_limit == 1
+    assert coord.status == STATUS_RATE_LIMITED
