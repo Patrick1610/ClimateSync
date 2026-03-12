@@ -687,3 +687,280 @@ async def test_rate_limit_still_applies_for_source_triggered_evaluation():
     hass.services.async_call.assert_not_called()
     assert coord.skipped_rate_limit == 1
     assert coord.status == STATUS_RATE_LIMITED
+
+
+# ---------------------------------------------------------------------------
+# Offset mode tests
+# ---------------------------------------------------------------------------
+
+from custom_components.climatesync.const import (  # noqa: E402
+    CONF_MODE,
+    CONF_OFFSET_ENTITY,
+    MODE_DELTA,
+    MODE_OFFSET,
+)
+
+
+def _build_offset_coordinator(
+    *,
+    source_entities: list[str] | None = None,
+    destination_entity: str = "climate.dest",
+    idle_temperature: float = DEFAULT_IDLE_TEMPERATURE,
+    max_setpoint: float = DEFAULT_MAX_SETPOINT,
+    min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
+    min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
+    offset_entity: str = "number.dest_offset",
+    rounding_mode: str = DEFAULT_ROUNDING_MODE,
+) -> tuple[ClimateSyncCoordinator, MagicMock]:
+    """Build a coordinator configured for offset mode."""
+    coord, hass = _build_coordinator(
+        source_entities=source_entities,
+        destination_entity=destination_entity,
+        idle_temperature=idle_temperature,
+        max_setpoint=max_setpoint,
+        min_change_threshold=min_change_threshold,
+        min_send_interval=min_send_interval,
+        rounding_mode=rounding_mode,
+    )
+    coord._mode = MODE_OFFSET
+    coord._offset_entity = offset_entity
+    return coord, hass
+
+
+def _make_number_state(value: float, step: float | None = None) -> MagicMock:
+    """Return a mock number entity state."""
+    s = MagicMock()
+    s.state = str(value)
+    attrs: dict = {}
+    if step is not None:
+        attrs["step"] = step
+    s.attributes = attrs
+    return s
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_example1_first_sync():
+    """Verify Offset Mode Example 1 from the problem spec (first sync)."""
+    # Destination: real=19.2, offset=0.0, reported=19.2
+    # Rooms:
+    #   Living Room: 20.0 → 20.5 (delta 0.5)
+    #   Bathroom: 18.0 → 19.5 (delta 1.5)  ← leading
+    #   Office: 19.5 → 19.5 (delta 0)
+    # Expected: new_offset = 18.0 - 19.2 = -1.2, new_target = 19.5
+
+    coord, hass = _build_offset_coordinator(
+        source_entities=["climate.living", "climate.bathroom", "climate.office"],
+        min_change_threshold=0.05,  # low threshold to allow the change
+    )
+
+    _configure_states(hass, {
+        "climate.living": _make_state(current_temperature=20.0, target_temperature=20.5),
+        "climate.bathroom": _make_state(current_temperature=18.0, target_temperature=19.5),
+        "climate.office": _make_state(current_temperature=19.5, target_temperature=19.5),
+        "climate.dest": _make_state(current_temperature=19.2, target_temperature=20.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    # Leading room should be bathroom (highest delta)
+    assert coord.leading_room == "climate.bathroom"
+    # Reconstructed real temperature
+    assert abs(coord.destination_real_current - 19.2) < 0.001
+    # New offset = 18.0 - 19.2 = -1.2
+    assert abs(coord.desired_offset - (-1.2)) < 0.001
+    # New target = 19.5
+    assert coord.desired_target == 19.5
+
+    # Verify service calls: first set_value (offset), then set_temperature
+    assert hass.services.async_call.call_count == 2
+    calls = hass.services.async_call.call_args_list
+    # First call: set offset
+    assert calls[0][0][0] == "number"
+    assert calls[0][0][1] == "set_value"
+    assert abs(calls[0][0][2]["value"] - (-1.2)) < 0.001
+    # Second call: set temperature
+    assert calls[1][0][0] == "climate"
+    assert calls[1][0][1] == "set_temperature"
+    assert calls[1][0][2]["temperature"] == 19.5
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_example2_resync_with_new_leading_room():
+    """Verify Offset Mode Example 2 from the problem spec (resync)."""
+    # Current destination state: real=19.2, offset=-1.2, reported=18.0
+    # New rooms:
+    #   Living Room: 19.8 → 20.0 (delta 0.2)
+    #   Bathroom: 19.2 → 19.5 (delta 0.3)
+    #   Master Bedroom: 16.0 → 18.0 (delta 2.0) ← leading
+    # Reconstruct real: 18.0 - (-1.2) = 19.2
+    # new_offset = 16.0 - 19.2 = -3.2
+    # new_target = 18.0
+
+    coord, hass = _build_offset_coordinator(
+        source_entities=["climate.living", "climate.bathroom", "climate.master"],
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.living": _make_state(current_temperature=19.8, target_temperature=20.0),
+        "climate.bathroom": _make_state(current_temperature=19.2, target_temperature=19.5),
+        "climate.master": _make_state(current_temperature=16.0, target_temperature=18.0),
+        "climate.dest": _make_state(current_temperature=18.0, target_temperature=19.5),
+        "number.dest_offset": _make_number_state(-1.2),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.leading_room == "climate.master"
+    assert abs(coord.destination_real_current - 19.2) < 0.001
+    assert abs(coord.desired_offset - (-3.2)) < 0.001
+    assert coord.desired_target == 18.0
+
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 2
+    assert abs(calls[0][0][2]["value"] - (-3.2)) < 0.001
+    assert calls[1][0][2]["temperature"] == 18.0
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_idle_when_no_demand():
+    """Offset mode: when all deltas are 0, set idle temperature, do not set offset."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(-1.0),
+    })
+
+    await coord._async_evaluate()
+
+    # computed_setpoint should be the idle temperature
+    assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
+
+    # Offset must NOT have been changed (only climate.set_temperature called)
+    calls = hass.services.async_call.call_args_list
+    # Either no calls (anti-flap) or only a climate call
+    for call in calls:
+        # Should not call set_value
+        assert call[0][1] != "set_value", "Offset must not be reset in idle state"
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_missing_offset_entity():
+    """Offset mode: when offset entity is unavailable, evaluation continues gracefully."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.0, target_temperature=20.0),
+        # offset entity is unavailable
+        "number.dest_offset": _make_state(current_temperature=None, target_temperature=None, state="unavailable"),
+    })
+
+    # Must not raise
+    await coord._async_evaluate()
+
+    # No temperature calls should have been made
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_anti_flap_skips_when_no_change():
+    """Offset mode: anti-flap skips when offset and target would not change meaningfully."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.5,
+    )
+
+    # Room delta = 1.0 (temp 19.0 → target 20.0)
+    # Dest reported = 19.0, offset = 0.0 → real = 19.0
+    # new_offset = 19.0 - 19.0 = 0.0 (no change)
+    # new_target = 20.0, current dest target = 20.0 (no change)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.0, target_temperature=20.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    initial_skipped = coord.skipped_anti_flap
+    await coord._async_evaluate()
+
+    # Anti-flap should have fired since neither offset nor target changes
+    assert coord.skipped_anti_flap > initial_skipped
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_uses_entity_step_for_rounding():
+    """Offset mode: offset is rounded according to the number entity's step attribute."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    # Room: current=17.3, target=20.0 → delta 2.7
+    # Dest: reported=19.0, offset=0.0 → real=19.0
+    # Raw new_offset = 17.3 - 19.0 = -1.7
+    # With step=0.5: round(-1.7 / 0.5) * 0.5 = round(-3.4) * 0.5 = -3 * 0.5 = -1.5
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=17.3, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.0, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0, step=0.5),
+    })
+
+    await coord._async_evaluate()
+
+    # Offset should be rounded to nearest 0.5
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 2
+    applied_offset = calls[0][0][2]["value"]
+    # Should be a multiple of 0.5
+    assert abs(applied_offset % 0.5) < 0.001 or abs(abs(applied_offset % 0.5) - 0.5) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_input_number_domain():
+    """Offset mode: set_value is called on input_number domain when used."""
+    coord, hass = _build_offset_coordinator(
+        offset_entity="input_number.dest_offset",
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "input_number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 2
+    # First call must target input_number domain
+    assert calls[0][0][0] == "input_number"
+    assert calls[0][0][1] == "set_value"
+
+
+@pytest.mark.asyncio
+async def test_delta_mode_remains_default():
+    """Existing delta-mode behaviour is unchanged when mode=delta (default)."""
+    coord, hass = _build_coordinator(min_change_threshold=0.05)
+    # Verify mode defaults to delta
+    assert coord._mode == MODE_DELTA
+
+    # delta = 2.0, dest_current = 20.0 → setpoint = 22.0
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == 22.0
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 1
+    assert calls[0][0][1] == "set_temperature"

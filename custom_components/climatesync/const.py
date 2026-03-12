@@ -11,6 +11,10 @@ CONF_RESYNC_INTERVAL = "resync_interval_seconds"
 CONF_MIN_CHANGE_THRESHOLD = "min_change_threshold"
 CONF_MIN_SEND_INTERVAL = "min_send_interval_seconds"
 
+# Mode selection
+CONF_MODE = "mode"
+CONF_OFFSET_ENTITY = "offset_entity"
+
 DEFAULT_IDLE_TEMPERATURE = 5.0
 DEFAULT_MAX_SETPOINT = 35.0
 DEFAULT_ROUNDING_MODE = "1_decimal"
@@ -23,6 +27,11 @@ ROUNDING_MODE_1DEC = "1_decimal"
 ROUNDING_MODE_2DEC = "2_decimals"
 
 ROUNDING_MODES = [ROUNDING_MODE_HALF, ROUNDING_MODE_1DEC, ROUNDING_MODE_2DEC]
+
+# Operating modes
+MODE_DELTA = "delta"
+MODE_OFFSET = "offset"
+DEFAULT_MODE = MODE_DELTA
 
 # Status states for sensor.climatesync_status
 STATUS_OK = "ok"

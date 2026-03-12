@@ -8,14 +8,22 @@
           "source_entities": "Bron-klimaatentiteiten (kamers)"
         }
       },
+      "select_mode": {
+        "title": "ClimateSync – Stap 2: Bedrijfsmodus",
+        "description": "Kies hoe ClimateSync de bestemmings-thermostaat aanstuurt.\n\n**Delta-modus (standaard)** — Werkt met elke thermostaat. ClimateSync zoekt de kamer met de hoogste warmtevraag en voegt dat verschil toe aan de temperatuur van de bestemming.\n\n**Offset-modus (geavanceerd)** — Laat de bestemmings-thermostaat zich gedragen als de kamer met de hoogste warmtevraag. Vereist dat de thermostaat een temperatuuroffset-entiteit (number of input_number) blootstelt.",
+        "data": {
+          "mode": "Bedrijfsmodus"
+        }
+      },
       "destination": {
-        "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Selecteer de thermostaat die ClimateSync bestuurt. De **rusttemperatuur** wordt gebruikt als geen enkele kamer verwarming nodig heeft. Het **maximale setpoint** begrenst hoe hoog ClimateSync de bestemming ooit kan instellen (voorkomt ongewenste pieken). De **afrondingsmodus** bepaalt hoe het setpoint wordt afgerond voordat het wordt verzonden.",
+        "title": "ClimateSync – Stap 3: Bestemming & Instellingen",
+        "description": "Selecteer de thermostaat die ClimateSync bestuurt. De **rusttemperatuur** wordt gebruikt als geen enkele kamer verwarming nodig heeft. Het **maximale setpoint** begrenst hoe hoog ClimateSync de bestemming ooit kan instellen. De **afrondingsmodus** bepaalt hoe het setpoint wordt afgerond.\n\nAls u **Offset-modus** hebt gekozen, geef dan ook de offset-entiteit op.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
           "max_setpoint": "Maximaal setpoint (°C) – harde bovengrens voor het bestemmingssetpoint",
-          "rounding_mode": "Afrondingsmodus voor het setpoint"
+          "rounding_mode": "Afrondingsmodus voor het setpoint",
+          "offset_entity": "Offset-entiteit (number of input_number van de thermostaat)"
         }
       }
     },
@@ -34,14 +42,22 @@
           "source_entities": "Bron-klimaatentiteiten (kamers)"
         }
       },
+      "select_mode": {
+        "title": "ClimateSync – Stap 2: Bedrijfsmodus",
+        "description": "Kies hoe ClimateSync de bestemmings-thermostaat aanstuurt.\n\n**Delta-modus (standaard)** — Werkt met elke thermostaat.\n\n**Offset-modus (geavanceerd)** — Vereist een offset-entiteit op de thermostaat.",
+        "data": {
+          "mode": "Bedrijfsmodus"
+        }
+      },
       "destination": {
-        "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Maximaal setpoint**: harde bovengrens om ongewenste pieken te voorkomen. **Hersynchronisatie-interval**: hoe vaak ClimateSync controleert ook zonder wijzigingen. **Minimale wijzigingsdrempel**: kleinste setpointwijziging die de moeite waard is om te verzenden. **Minimaal verzendinterval**: minimale seconden tussen twee serviceaanroepen (snelheidsbegrenzer).",
+        "title": "ClimateSync – Stap 3: Bestemming & Instellingen",
+        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Maximaal setpoint**: harde bovengrens om ongewenste pieken te voorkomen. **Hersynchronisatie-interval**: hoe vaak ClimateSync controleert ook zonder wijzigingen. **Minimale wijzigingsdrempel**: kleinste setpointwijziging die de moeite waard is. **Minimaal verzendinterval**: minimale seconden tussen twee serviceaanroepen.\n\nAls u **Offset-modus** hebt gekozen, geef dan ook de offset-entiteit op.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
           "max_setpoint": "Maximaal setpoint (°C) – harde bovengrens voor het bestemmingssetpoint",
           "rounding_mode": "Afrondingsmodus voor het setpoint",
+          "offset_entity": "Offset-entiteit (number of input_number van de thermostaat)",
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
           "min_change_threshold": "Minimale wijzigingsdrempel (°C)",
           "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
@@ -60,6 +76,12 @@
         "half_step": "0,5 stappen (bijv. 19,0 – 19,5 – 20,0)",
         "1_decimal": "1 decimaal (bijv. 19,0 – 19,3 – 19,7)",
         "2_decimals": "2 decimalen (bijv. 19,00 – 19,33 – 19,67)"
+      }
+    },
+    "mode": {
+      "options": {
+        "delta": "Delta-modus (standaard) – werkt met elke thermostaat",
+        "offset": "Offset-modus (geavanceerd) – vereist een offset-entiteit"
       }
     }
   }
