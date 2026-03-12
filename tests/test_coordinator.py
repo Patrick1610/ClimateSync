@@ -919,7 +919,7 @@ async def test_offset_mode_uses_entity_step_for_rounding():
     assert len(calls) == 2
     applied_offset = calls[0][0][2]["value"]
     # Should be a multiple of 0.5
-    assert abs(applied_offset % 0.5) < 0.001 or abs(abs(applied_offset % 0.5) - 0.5) < 0.001
+    assert abs(round(applied_offset / 0.5) * 0.5 - applied_offset) < 0.001
 
 
 @pytest.mark.asyncio
