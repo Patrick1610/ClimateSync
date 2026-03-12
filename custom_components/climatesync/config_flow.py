@@ -16,6 +16,8 @@ from .const import (
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
+    CONF_MODE,
+    CONF_OFFSET_ENTITY,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
@@ -23,9 +25,12 @@ from .const import (
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
+    DEFAULT_MODE,
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_MODE,
     DOMAIN,
+    MODE_DELTA,
+    MODE_OFFSET,
     ROUNDING_MODES,
 )
 
@@ -51,6 +56,24 @@ def _sources_schema(default_sources: list[str] | None = None) -> vol.Schema:
     )
 
 
+def _mode_schema(default_mode: str = DEFAULT_MODE) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(CONF_MODE, default=default_mode): selector.selector(
+                {
+                    "select": {
+                        "options": [
+                            {"value": MODE_DELTA, "label": MODE_DELTA},
+                            {"value": MODE_OFFSET, "label": MODE_OFFSET},
+                        ],
+                        "translation_key": "mode",
+                    }
+                }
+            ),
+        }
+    )
+
+
 def _destination_schema(
     default_dest: str | None = None,
     default_idle: float = DEFAULT_IDLE_TEMPERATURE,
@@ -60,6 +83,8 @@ def _destination_schema(
     default_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
     default_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
     include_advanced: bool = False,
+    include_offset_entity: bool = False,
+    default_offset_entity: str | None = None,
 ) -> vol.Schema:
     fields: dict = {
         vol.Required(CONF_DESTINATION_ENTITY, default=default_dest): selector.selector(
@@ -100,6 +125,17 @@ def _destination_schema(
             }
         ),
     }
+
+    if include_offset_entity:
+        fields[vol.Required(CONF_OFFSET_ENTITY, default=default_offset_entity)] = (
+            selector.selector(
+                {
+                    "entity": {
+                        "domain": ["number", "input_number"],
+                    }
+                }
+            )
+        )
 
     if include_advanced:
         fields[vol.Required(CONF_RESYNC_INTERVAL, default=default_resync)] = (
@@ -146,7 +182,7 @@ def _destination_schema(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Initial config flow (2 steps, no advanced options)
+# Initial config flow (3 steps: sources → mode → destination)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -157,6 +193,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialise config flow."""
         self._source_entities: list[str] = []
+        self._mode: str = DEFAULT_MODE
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -170,7 +207,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_SOURCE_ENTITIES] = "no_sources"
             else:
                 self._source_entities = sources
-                return await self.async_step_destination()
+                return await self.async_step_select_mode()
 
         return self.async_show_form(
             step_id="user",
@@ -178,10 +215,24 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_select_mode(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 2: choose operating mode."""
+        if user_input is not None:
+            self._mode = user_input.get(CONF_MODE, DEFAULT_MODE)
+            return await self.async_step_destination()
+
+        return self.async_show_form(
+            step_id="select_mode",
+            data_schema=_mode_schema(),
+            errors={},
+        )
+
     async def async_step_destination(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 2: select destination entity + basic settings."""
+        """Step 3: select destination entity + basic settings."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -190,21 +241,26 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif self._mode == MODE_OFFSET and not user_input.get(CONF_OFFSET_ENTITY):
+                errors[CONF_OFFSET_ENTITY] = "no_offset_entity"
             else:
-                return self.async_create_entry(
-                    title="ClimateSync",
-                    data={
-                        CONF_SOURCE_ENTITIES: self._source_entities,
-                        CONF_DESTINATION_ENTITY: dest,
-                        CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
-                        CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
-                        CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
-                    },
-                )
+                data: dict[str, Any] = {
+                    CONF_SOURCE_ENTITIES: self._source_entities,
+                    CONF_DESTINATION_ENTITY: dest,
+                    CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
+                    CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
+                    CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
+                    CONF_MODE: self._mode,
+                }
+                if self._mode == MODE_OFFSET:
+                    data[CONF_OFFSET_ENTITY] = user_input[CONF_OFFSET_ENTITY]
+                return self.async_create_entry(title="ClimateSync", data=data)
 
         return self.async_show_form(
             step_id="destination",
-            data_schema=_destination_schema(),
+            data_schema=_destination_schema(
+                include_offset_entity=(self._mode == MODE_OFFSET),
+            ),
             errors=errors,
         )
 
@@ -218,16 +274,17 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Options flow – same wizard as initial setup, all settings editable
+# Options flow – same 3-step wizard as initial setup, all settings editable
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
-    """Options flow: mirrors the 2-step setup wizard."""
+    """Options flow: mirrors the 3-step setup wizard."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialise options flow."""
         self._config_entry = config_entry
         self._source_entities: list[str] = []
+        self._mode: str = DEFAULT_MODE
 
     def _get(self, key: str, default: Any) -> Any:
         """Return value from options, falling back to data, then to default."""
@@ -247,7 +304,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_SOURCE_ENTITIES] = "no_sources"
             else:
                 self._source_entities = sources
-                return await self.async_step_destination()
+                return await self.async_step_select_mode()
 
         current_sources = self._get(CONF_SOURCE_ENTITIES, [])
         return self.async_show_form(
@@ -256,10 +313,25 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
         )
 
+    async def async_step_select_mode(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 2 (re-configure): choose operating mode."""
+        if user_input is not None:
+            self._mode = user_input.get(CONF_MODE, DEFAULT_MODE)
+            return await self.async_step_destination()
+
+        current_mode = self._get(CONF_MODE, DEFAULT_MODE)
+        return self.async_show_form(
+            step_id="select_mode",
+            data_schema=_mode_schema(default_mode=current_mode),
+            errors={},
+        )
+
     async def async_step_destination(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 2 (re-configure): destination + all settings."""
+        """Step 3 (re-configure): destination + all settings."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -268,20 +340,23 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif self._mode == MODE_OFFSET and not user_input.get(CONF_OFFSET_ENTITY):
+                errors[CONF_OFFSET_ENTITY] = "no_offset_entity"
             else:
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        CONF_SOURCE_ENTITIES: self._source_entities,
-                        CONF_DESTINATION_ENTITY: dest,
-                        CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
-                        CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
-                        CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
-                        CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
-                        CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
-                        CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
-                    },
-                )
+                data: dict[str, Any] = {
+                    CONF_SOURCE_ENTITIES: self._source_entities,
+                    CONF_DESTINATION_ENTITY: dest,
+                    CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
+                    CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
+                    CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
+                    CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
+                    CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
+                    CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
+                    CONF_MODE: self._mode,
+                }
+                if self._mode == MODE_OFFSET:
+                    data[CONF_OFFSET_ENTITY] = user_input[CONF_OFFSET_ENTITY]
+                return self.async_create_entry(title="", data=data)
 
         return self.async_show_form(
             step_id="destination",
@@ -298,7 +373,10 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                     CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL
                 ),
                 include_advanced=True,
+                include_offset_entity=(self._mode == MODE_OFFSET),
+                default_offset_entity=self._get(CONF_OFFSET_ENTITY, None),
             ),
             errors=errors,
         )
+
 

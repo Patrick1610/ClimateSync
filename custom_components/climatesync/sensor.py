@@ -290,7 +290,8 @@ class StatusSensor(_ClimateSyncBaseSensor):
             if coord.last_service_call_time
             else None
         )
-        return {
+        attrs: dict[str, Any] = {
+            "mode": coord.mode,
             "last_update_time": last_update,
             "last_service_call_time": last_call,
             "last_desired_setpoint": coord.last_desired_setpoint,
@@ -307,4 +308,22 @@ class StatusSensor(_ClimateSyncBaseSensor):
             "skipped_anti_flap": coord.skipped_anti_flap,
             "skipped_rate_limit": coord.skipped_rate_limit,
             "last_error": coord.last_error,
+            "leading_room": coord.leading_room,
         }
+
+        # Add offset-mode-specific diagnostics when relevant
+        leading = coord.leading_room
+        if leading:
+            leading_info = coord.room_deltas.get(leading, {})
+            attrs["leading_room_current"] = leading_info.get("current")
+            attrs["leading_room_target"] = leading_info.get("target")
+
+        attrs["destination_reported_current"] = coord.destination_current_temperature
+        attrs["destination_real_current"] = coord.destination_real_current
+        attrs["current_offset"] = coord.current_offset
+        attrs["desired_offset"] = coord.desired_offset
+        attrs["last_applied_offset"] = coord.last_applied_offset
+        attrs["desired_target"] = coord.desired_target
+        attrs["last_applied_target"] = coord.last_applied_target
+
+        return attrs
