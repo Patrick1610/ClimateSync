@@ -127,7 +127,7 @@ def _destination_schema(
     }
 
     if include_offset_entity:
-        fields[vol.Optional(CONF_OFFSET_ENTITY, default=default_offset_entity)] = (
+        fields[vol.Required(CONF_OFFSET_ENTITY, default=default_offset_entity)] = (
             selector.selector(
                 {
                     "entity": {
@@ -241,6 +241,8 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif self._mode == MODE_OFFSET and not user_input.get(CONF_OFFSET_ENTITY):
+                errors[CONF_OFFSET_ENTITY] = "no_offset_entity"
             else:
                 data: dict[str, Any] = {
                     CONF_SOURCE_ENTITIES: self._source_entities,
@@ -251,9 +253,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_MODE: self._mode,
                 }
                 if self._mode == MODE_OFFSET:
-                    offset_entity = user_input.get(CONF_OFFSET_ENTITY)
-                    if offset_entity:
-                        data[CONF_OFFSET_ENTITY] = offset_entity
+                    data[CONF_OFFSET_ENTITY] = user_input[CONF_OFFSET_ENTITY]
                 return self.async_create_entry(title="ClimateSync", data=data)
 
         return self.async_show_form(
@@ -340,6 +340,8 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif self._mode == MODE_OFFSET and not user_input.get(CONF_OFFSET_ENTITY):
+                errors[CONF_OFFSET_ENTITY] = "no_offset_entity"
             else:
                 data: dict[str, Any] = {
                     CONF_SOURCE_ENTITIES: self._source_entities,
@@ -353,9 +355,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                     CONF_MODE: self._mode,
                 }
                 if self._mode == MODE_OFFSET:
-                    offset_entity = user_input.get(CONF_OFFSET_ENTITY)
-                    if offset_entity:
-                        data[CONF_OFFSET_ENTITY] = offset_entity
+                    data[CONF_OFFSET_ENTITY] = user_input[CONF_OFFSET_ENTITY]
                 return self.async_create_entry(title="", data=data)
 
         return self.async_show_form(

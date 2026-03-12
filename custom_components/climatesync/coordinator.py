@@ -39,6 +39,7 @@ from .const import (
     STATUS_DESTINATION_UNAVAILABLE,
     STATUS_MISMATCH,
     STATUS_MISSING_SOURCE_DATA,
+    STATUS_OFFSET_ENTITY_UNAVAILABLE,
     STATUS_OK,
     STATUS_RATE_LIMITED,
 )
@@ -485,6 +486,7 @@ class ClimateSyncCoordinator:
             _LOGGER.warning(
                 "ClimateSync: offset mode active but no offset entity configured"
             )
+            self.status = STATUS_OFFSET_ENTITY_UNAVAILABLE
             return
 
         offset_state = self.hass.states.get(self._offset_entity)
@@ -492,7 +494,7 @@ class ClimateSyncCoordinator:
             _LOGGER.warning(
                 "ClimateSync: offset entity %s unavailable", self._offset_entity
             )
-            self.status = STATUS_DESTINATION_UNAVAILABLE
+            self.status = STATUS_OFFSET_ENTITY_UNAVAILABLE
             return
 
         current_offset = _safe_float(offset_state.state)
@@ -525,9 +527,17 @@ class ClimateSyncCoordinator:
         leading_target = leading_info.get("target")
 
         if leading_current is None or leading_target is None:
+            # Leading room data disappeared between evaluations – fall back to idle
             _LOGGER.debug(
-                "ClimateSync: offset mode – leading room %s missing temperatures", leading
+                "ClimateSync: offset mode – leading room %s missing temperatures, "
+                "falling back to idle temperature",
+                leading,
             )
+            idle_final = _apply_rounding(self._idle_temperature, self._rounding_mode)
+            self.computed_setpoint = idle_final
+            self.last_desired_setpoint = idle_final
+            self.desired_target = idle_final
+            await self._async_apply_setpoint(idle_final, bypass_rate_limit=bypass_rate_limit)
             return
 
         # New offset: make destination appear to be at the leading room's temperature

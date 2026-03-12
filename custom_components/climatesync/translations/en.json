@@ -30,7 +30,8 @@
     "error": {
       "no_sources": "Please select at least one source climate entity.",
       "no_destination": "Please select a destination thermostat.",
-      "dest_is_source": "The destination thermostat cannot also be a source room."
+      "dest_is_source": "The destination thermostat cannot also be a source room.",
+      "no_offset_entity": "Please select an offset entity. Offset Mode requires a temperature offset entity (number or input_number) exposed by the thermostat."
     }
   },
   "options": {
@@ -67,7 +68,8 @@
     "error": {
       "no_sources": "Please select at least one source climate entity.",
       "no_destination": "Please select a destination thermostat.",
-      "dest_is_source": "The destination thermostat cannot also be a source room."
+      "dest_is_source": "The destination thermostat cannot also be a source room.",
+      "no_offset_entity": "Please select an offset entity. Offset Mode requires a temperature offset entity (number or input_number) exposed by the thermostat."
     }
   },
   "selector": {

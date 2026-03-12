@@ -55,6 +55,7 @@ from custom_components.climatesync.const import (  # noqa: E402
     STATUS_APPLY_FAILED,
     STATUS_MISMATCH,
     STATUS_MISSING_SOURCE_DATA,
+    STATUS_OFFSET_ENTITY_UNAVAILABLE,
     STATUS_OK,
     STATUS_RATE_LIMITED,
 )
@@ -851,7 +852,7 @@ async def test_offset_mode_idle_when_no_demand():
 
 @pytest.mark.asyncio
 async def test_offset_mode_missing_offset_entity():
-    """Offset mode: when offset entity is unavailable, evaluation continues gracefully."""
+    """Offset mode: when offset entity is unavailable, status is set correctly."""
     coord, hass = _build_offset_coordinator(
         min_change_threshold=0.05,
     )
@@ -866,6 +867,8 @@ async def test_offset_mode_missing_offset_entity():
     # Must not raise
     await coord._async_evaluate()
 
+    # Status must reflect offset entity unavailability (not destination_unavailable)
+    assert coord.status == STATUS_OFFSET_ENTITY_UNAVAILABLE
     # No temperature calls should have been made
     hass.services.async_call.assert_not_called()
 
@@ -964,3 +967,46 @@ async def test_delta_mode_remains_default():
     calls = hass.services.async_call.call_args_list
     assert len(calls) == 1
     assert calls[0][0][1] == "set_temperature"
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_leading_room_disappears_falls_back_to_idle():
+    """Offset mode: when leading room loses temperature data, fall back to idle temperature."""
+    coord, hass = _build_offset_coordinator(
+        source_entities=["climate.room1", "climate.room2"],
+        min_change_threshold=0.05,
+    )
+
+    # room1 becomes unavailable (no current/target temperatures), room2 has delta 0
+    _configure_states(hass, {
+        # room1 loses both temperatures mid-evaluation
+        "climate.room1": _make_state(current_temperature=None, target_temperature=None, state="heat"),
+        "climate.room2": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.0, target_temperature=20.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    # With no real demand (leading=None or leading has None temps), fall back to idle
+    assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
+
+
+@pytest.mark.asyncio
+async def test_offset_mode_no_offset_entity_configured_sets_status():
+    """Offset mode: when no offset entity is configured at all, status is offset_entity_unavailable."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+    # Remove the offset entity from the coordinator (simulates mis-configuration)
+    coord._offset_entity = None
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.0, target_temperature=20.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.status == STATUS_OFFSET_ENTITY_UNAVAILABLE
+    hass.services.async_call.assert_not_called()

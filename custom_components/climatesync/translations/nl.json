@@ -30,7 +30,8 @@
     "error": {
       "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",
-      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn."
+      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
+      "no_offset_entity": "Selecteer een offset-entiteit. Offset-modus vereist een temperatuuroffset-entiteit (number of input_number) die door de thermostaat beschikbaar wordt gesteld."
     }
   },
   "options": {
@@ -67,7 +68,8 @@
     "error": {
       "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",
-      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn."
+      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
+      "no_offset_entity": "Selecteer een offset-entiteit. Offset-modus vereist een temperatuuroffset-entiteit (number of input_number) die door de thermostaat beschikbaar wordt gesteld."
     }
   },
   "selector": {

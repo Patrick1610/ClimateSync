@@ -37,6 +37,7 @@ DEFAULT_MODE = MODE_DELTA
 STATUS_OK = "ok"
 STATUS_RATE_LIMITED = "rate_limited"
 STATUS_DESTINATION_UNAVAILABLE = "destination_unavailable"
+STATUS_OFFSET_ENTITY_UNAVAILABLE = "offset_entity_unavailable"
 STATUS_MISSING_SOURCE_DATA = "missing_source_data"
 STATUS_APPLY_FAILED = "apply_failed"
 STATUS_MISMATCH = "mismatch"
