@@ -826,7 +826,7 @@ async def test_offset_mode_example2_resync_with_new_leading_room():
 
 @pytest.mark.asyncio
 async def test_offset_mode_idle_when_no_demand():
-    """Offset mode: when all deltas are 0, set idle temperature, do not set offset."""
+    """Offset mode: when all deltas are 0, set idle temperature and reset offset to 0."""
     coord, hass = _build_offset_coordinator(
         min_change_threshold=0.05,
     )
@@ -842,12 +842,15 @@ async def test_offset_mode_idle_when_no_demand():
     # computed_setpoint should be the idle temperature
     assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
 
-    # Offset must NOT have been changed (only climate.set_temperature called)
+    # Offset MUST have been reset to 0 (offset was -1.0, which is meaningfully non-zero)
     calls = hass.services.async_call.call_args_list
-    # Either no calls (anti-flap) or only a climate call
-    for call in calls:
-        # Should not call set_value
-        assert call[0][1] != "set_value", "Offset must not be reset in idle state"
+    set_value_calls = [c for c in calls if c[0][1] == "set_value"]
+    assert len(set_value_calls) == 1, "Offset must be reset to 0 when idle and non-zero"
+    assert set_value_calls[0][0][2]["value"] == 0
+
+    # idle_offset_reset_count should reflect the reset
+    assert coord.idle_offset_reset_count == 1
+    assert coord.last_idle_offset_reset_time is not None
 
 
 @pytest.mark.asyncio
@@ -1582,3 +1585,224 @@ async def test_possible_feedback_events_counted():
 
     assert coord._possible_feedback_events == 2
     assert coord.possible_feedback_events == 2
+
+
+# ---------------------------------------------------------------------------
+# Idle offset reset tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_does_not_fire_when_offset_already_zero():
+    """Offset idle reset must NOT call set_value when offset is already 0."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(0.0),  # already zero
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
+
+    calls = hass.services.async_call.call_args_list
+    set_value_calls = [c for c in calls if c[0][1] == "set_value"]
+    assert len(set_value_calls) == 0, "Offset must NOT be written when already 0"
+    assert coord.idle_offset_reset_count == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_does_not_fire_when_below_min_change():
+    """Offset idle reset is skipped when offset is below offset_min_change threshold."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_min_change=0.5,  # high threshold
+    )
+    # offset = 0.1, abs(0.1) < offset_min_change (0.5) → no reset
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(0.1),
+    })
+
+    await coord._async_evaluate()
+
+    calls = hass.services.async_call.call_args_list
+    set_value_calls = [c for c in calls if c[0][1] == "set_value"]
+    assert len(set_value_calls) == 0, "Offset reset skipped because change < offset_min_change"
+    assert coord.idle_offset_reset_count == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_count_increments_each_reset():
+    """idle_offset_reset_count increments on each idle-triggered offset reset."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    # First idle evaluation with non-zero offset
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(-1.5),
+    })
+
+    await coord._async_evaluate()
+    assert coord.idle_offset_reset_count == 1
+    assert coord.last_idle_offset_reset_time is not None
+    first_reset_time = coord.last_idle_offset_reset_time
+
+    # Second idle evaluation with offset still non-zero (simulate it wasn't applied yet)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(-1.5),
+    })
+
+    await coord._async_evaluate()
+    assert coord.idle_offset_reset_count == 2
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_uses_set_value_with_domain():
+    """Idle offset reset calls set_value on the correct entity domain."""
+    coord, hass = _build_offset_coordinator(
+        offset_entity="input_number.dest_offset",
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "input_number.dest_offset": _make_number_state(-2.0),
+    })
+
+    await coord._async_evaluate()
+
+    calls = hass.services.async_call.call_args_list
+    set_value_calls = [c for c in calls if c[0][1] == "set_value"]
+    assert len(set_value_calls) == 1
+    assert set_value_calls[0][0][0] == "input_number"
+    assert set_value_calls[0][0][2]["value"] == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_order_target_first():
+    """Idle offset reset must set the target temperature BEFORE resetting the offset."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(-1.0),
+    })
+
+    await coord._async_evaluate()
+
+    calls = hass.services.async_call.call_args_list
+    # There should be 2 calls: set_temperature first, then set_value
+    climate_idx = next(i for i, c in enumerate(calls) if c[0][1] == "set_temperature")
+    offset_idx = next(i for i, c in enumerate(calls) if c[0][1] == "set_value")
+    assert climate_idx < offset_idx, "Target must be set before offset reset"
+    # Target should be idle temperature
+    assert calls[climate_idx][0][2]["temperature"] == DEFAULT_IDLE_TEMPERATURE
+    # Offset should be reset to 0
+    assert calls[offset_idx][0][2]["value"] == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_failure_sets_apply_failed_status():
+    """When idle offset reset service call fails, status is set to apply_failed."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(-1.0),
+    })
+
+    call_count = {"n": 0}
+    original_call = hass.services.async_call
+
+    async def selective_fail(*args, **kwargs):
+        call_count["n"] += 1
+        # Fail only on the second call (offset reset), not the first (set_temperature)
+        if call_count["n"] == 2:
+            raise RuntimeError("offset write failed")
+        return await original_call(*args, **kwargs)
+
+    hass.services.async_call = selective_fail
+
+    await coord._async_evaluate()
+
+    assert coord.status == STATUS_APPLY_FAILED
+    assert coord.apply_failures == 1
+    assert coord.idle_offset_reset_count == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_skipped_when_no_offset_entity():
+    """When no offset entity is configured, idle path still works (no crash)."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+    coord._offset_entity = None  # no offset entity
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+    })
+
+    # Must not raise
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
+    assert coord.idle_offset_reset_count == 0
+    calls = hass.services.async_call.call_args_list
+    set_value_calls = [c for c in calls if c[0][1] == "set_value"]
+    assert len(set_value_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_skipped_when_offset_entity_unavailable():
+    """When offset entity is unavailable during idle, offset reset is gracefully skipped."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_state(current_temperature=None, target_temperature=None, state="unavailable"),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
+    assert coord.idle_offset_reset_count == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_offset_reset_last_applied_offset_set_to_zero():
+    """After idle reset, last_applied_offset and last_offset_write_time are updated."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=21.0),
+        "number.dest_offset": _make_number_state(-2.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.last_applied_offset == 0.0
+    assert coord._last_offset_write_at is not None

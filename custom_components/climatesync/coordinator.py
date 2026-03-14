@@ -56,6 +56,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Delay (seconds) between writing the offset entity and setting the target temperature.
+# Gives the thermostat time to process the new offset before the setpoint is applied.
+_OFFSET_WRITE_DELAY_SECONDS = 0.5
+
 
 def _safe_float(value: Any) -> float | None:
     """Convert a value to float, returning None if it is unavailable/unknown/missing."""
@@ -138,6 +142,10 @@ class ClimateSyncCoordinator:
         self._possible_feedback_events: int = 0
         self._offset_min_interval_blocked_count: int = 0
         self._offset_threshold_skipped_count: int = 0
+
+        # Idle offset reset tracking
+        self._idle_offset_reset_count: int = 0
+        self._last_idle_offset_reset_time: datetime | None = None
 
         # Diagnostics
         self.status: str = STATUS_OK
@@ -517,16 +525,63 @@ class ClimateSyncCoordinator:
         now = dt_util.utcnow()
 
         if max_delta <= 0 or leading is None:
-            # Idle: set target to idle_temperature; do not reset offset
+            # Idle: set target to idle_temperature, then reset offset to 0 if non-zero
             idle_final = _apply_rounding(self._idle_temperature, self._rounding_mode)
             self.computed_setpoint = idle_final
             self.last_desired_setpoint = idle_final
             self.desired_target = idle_final
             _LOGGER.debug(
-                "ClimateSync: offset mode idle – setting target to %.2f, offset unchanged",
+                "ClimateSync: offset mode idle – setting target to %.2f",
                 idle_final,
             )
             await self._async_apply_setpoint(idle_final, bypass_rate_limit=bypass_rate_limit)
+
+            # Idle offset reset: after setting idle target, reset offset to 0 if it is
+            # meaningfully non-zero. This ensures the destination thermostat returns to a
+            # neutral (non-manipulated) baseline between heating cycles.
+            if self._offset_entity:
+                offset_state = self.hass.states.get(self._offset_entity)
+                if offset_state is not None and offset_state.state not in (
+                    "unavailable",
+                    "unknown",
+                ):
+                    current_offset = _safe_float(offset_state.state)
+                    if current_offset is not None:
+                        self.current_offset = current_offset
+                        if abs(current_offset) > self._offset_min_change:
+                            _LOGGER.debug(
+                                "ClimateSync: offset mode idle – resetting offset %.2f → 0 "
+                                "(demand ended, restoring neutral baseline)",
+                                current_offset,
+                            )
+                            await asyncio.sleep(_OFFSET_WRITE_DELAY_SECONDS)
+                            try:
+                                domain = self._offset_entity.split(".")[0]
+                                await self.hass.services.async_call(
+                                    domain,
+                                    "set_value",
+                                    {"entity_id": self._offset_entity, "value": 0},
+                                    blocking=True,
+                                )
+                                self.last_applied_offset = 0.0
+                                self._last_offset_write_at = now
+                                self._idle_offset_reset_count += 1
+                                self._last_idle_offset_reset_time = now
+                                _LOGGER.info(
+                                    "ClimateSync: offset mode idle – offset reset to 0 "
+                                    "(was %.2f, reset #%d)",
+                                    current_offset,
+                                    self._idle_offset_reset_count,
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                self.apply_failures += 1
+                                self.last_error = str(exc)
+                                self.status = STATUS_APPLY_FAILED
+                                _LOGGER.error(
+                                    "ClimateSync: offset mode idle reset failed for %s: %s",
+                                    self._offset_entity,
+                                    exc,
+                                )
             return
 
         # Validate offset entity
@@ -735,7 +790,7 @@ class ClimateSyncCoordinator:
                 self._settling_until = now + timedelta(seconds=self._offset_settle_seconds)
 
                 # Small delay so the thermostat processes the offset before we set target
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(_OFFSET_WRITE_DELAY_SECONDS)
 
             if should_write_target:
                 # Set destination target temperature
@@ -1027,3 +1082,13 @@ class ClimateSyncCoordinator:
     def previous_leading_room(self) -> str | None:
         """Return the previous leader before the last switch."""
         return self._previous_leading_room
+
+    @property
+    def idle_offset_reset_count(self) -> int:
+        """Return how many times the offset has been reset to 0 on idle."""
+        return self._idle_offset_reset_count
+
+    @property
+    def last_idle_offset_reset_time(self) -> datetime | None:
+        """Return the UTC time of the last idle offset reset."""
+        return self._last_idle_offset_reset_time
