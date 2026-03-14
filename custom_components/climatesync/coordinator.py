@@ -17,19 +17,29 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_LEADER_STICK_SECONDS,
+    CONF_LEADER_SWITCH_THRESHOLD,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_MODE,
     CONF_OFFSET_ENTITY,
+    CONF_OFFSET_MIN_CHANGE,
+    CONF_OFFSET_MIN_INTERVAL_SECONDS,
+    CONF_OFFSET_SETTLE_SECONDS,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_LEADER_STICK_SECONDS,
+    DEFAULT_LEADER_SWITCH_THRESHOLD,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_MODE,
+    DEFAULT_OFFSET_MIN_CHANGE,
+    DEFAULT_OFFSET_MIN_INTERVAL_SECONDS,
+    DEFAULT_OFFSET_SETTLE_SECONDS,
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_MODE,
     MODE_OFFSET,
@@ -90,6 +100,13 @@ class ClimateSyncCoordinator:
         self._mode: str = DEFAULT_MODE
         self._offset_entity: str | None = None
 
+        # Offset Mode stabilization settings
+        self._offset_settle_seconds: float = DEFAULT_OFFSET_SETTLE_SECONDS
+        self._offset_min_change: float = DEFAULT_OFFSET_MIN_CHANGE
+        self._offset_min_interval_seconds: float = DEFAULT_OFFSET_MIN_INTERVAL_SECONDS
+        self._leader_switch_threshold: float = DEFAULT_LEADER_SWITCH_THRESHOLD
+        self._leader_stick_seconds: float = DEFAULT_LEADER_STICK_SECONDS
+
         # Per-room deltas  {entity_id: {"delta": float, "current": float|None, "target": float|None}}
         self.room_deltas: dict[str, dict[str, Any]] = {}
         self.delta_max: float = 0.0
@@ -109,6 +126,18 @@ class ClimateSyncCoordinator:
         self.last_applied_offset: float | None = None
         self.desired_target: float | None = None
         self.last_applied_target: float | None = None
+
+        # Offset stabilization state
+        self._last_offset_write_at: datetime | None = None
+        self._last_target_write_at: datetime | None = None
+        self._settling_until: datetime | None = None
+        self._current_leading_room: str | None = None
+        self._previous_leading_room: str | None = None
+        self._candidate_leading_room: str | None = None
+        self._candidate_leading_since: datetime | None = None
+        self._possible_feedback_events: int = 0
+        self._offset_min_interval_blocked_count: int = 0
+        self._offset_threshold_skipped_count: int = 0
 
         # Diagnostics
         self.status: str = STATUS_OK
@@ -183,6 +212,23 @@ class ClimateSyncCoordinator:
         self._offset_entity = opts.get(
             CONF_OFFSET_ENTITY, data.get(CONF_OFFSET_ENTITY)
         ) or None
+
+        # Offset Mode stabilization settings
+        self._offset_settle_seconds = float(
+            opts.get(CONF_OFFSET_SETTLE_SECONDS, DEFAULT_OFFSET_SETTLE_SECONDS)
+        )
+        self._offset_min_change = float(
+            opts.get(CONF_OFFSET_MIN_CHANGE, DEFAULT_OFFSET_MIN_CHANGE)
+        )
+        self._offset_min_interval_seconds = float(
+            opts.get(CONF_OFFSET_MIN_INTERVAL_SECONDS, DEFAULT_OFFSET_MIN_INTERVAL_SECONDS)
+        )
+        self._leader_switch_threshold = float(
+            opts.get(CONF_LEADER_SWITCH_THRESHOLD, DEFAULT_LEADER_SWITCH_THRESHOLD)
+        )
+        self._leader_stick_seconds = float(
+            opts.get(CONF_LEADER_STICK_SECONDS, DEFAULT_LEADER_STICK_SECONDS)
+        )
 
         # Re-register listeners with updated intervals if already set up
         self._teardown_listeners()
@@ -467,7 +513,9 @@ class ClimateSyncCoordinator:
         *,
         bypass_rate_limit: bool = False,
     ) -> None:
-        """Offset mode: compute new offset + target and apply."""
+        """Offset mode: compute new offset + target and apply with stabilization."""
+        now = dt_util.utcnow()
+
         if max_delta <= 0 or leading is None:
             # Idle: set target to idle_temperature; do not reset offset
             idle_final = _apply_rounding(self._idle_temperature, self._rounding_mode)
@@ -521,8 +569,12 @@ class ClimateSyncCoordinator:
         dest_real = dest_reported - current_offset
         self.destination_real_current = dest_real
 
-        # Get leading room temperatures
-        leading_info = self.room_deltas.get(leading, {})
+        # Apply sticky-leader hysteresis: prevent rapid leader switching
+        stable_leading = self._update_sticky_leader(leading, now)
+        self.leading_room = stable_leading
+
+        # Get stable leading room temperatures
+        leading_info = self.room_deltas.get(stable_leading, {})
         leading_current = leading_info.get("current")
         leading_target = leading_info.get("target")
 
@@ -531,7 +583,7 @@ class ClimateSyncCoordinator:
             _LOGGER.debug(
                 "ClimateSync: offset mode – leading room %s missing temperatures, "
                 "falling back to idle temperature",
-                leading,
+                stable_leading,
             )
             idle_final = _apply_rounding(self._idle_temperature, self._rounding_mode)
             self.computed_setpoint = idle_final
@@ -539,6 +591,18 @@ class ClimateSyncCoordinator:
             self.desired_target = idle_final
             await self._async_apply_setpoint(idle_final, bypass_rate_limit=bypass_rate_limit)
             return
+
+        # Settling window: skip source-triggered evaluations after a recent offset write
+        if not bypass_rate_limit and self._settling_until is not None:
+            if now < self._settling_until:
+                self._possible_feedback_events += 1
+                _LOGGER.debug(
+                    "ClimateSync: offset mode settling active (%.1fs remaining), "
+                    "skipping source-triggered eval – possible feedback event #%d",
+                    (self._settling_until - now).total_seconds(),
+                    self._possible_feedback_events,
+                )
+                return
 
         # New offset: make destination appear to be at the leading room's temperature
         new_offset_raw = leading_current - dest_real
@@ -566,7 +630,7 @@ class ClimateSyncCoordinator:
 
         _LOGGER.debug(
             "ClimateSync: offset mode leading=%s real=%.2f offset=%.2f->%.2f target=%.2f",
-            leading,
+            stable_leading,
             dest_real,
             current_offset,
             new_offset,
@@ -578,10 +642,8 @@ class ClimateSyncCoordinator:
             diff = abs(self.destination_current_target - new_target)
             if diff > self._min_change_threshold:
                 if self.mismatch_since is None:
-                    self.mismatch_since = dt_util.utcnow()
-                self.mismatch_seconds = (
-                    dt_util.utcnow() - self.mismatch_since
-                ).total_seconds()
+                    self.mismatch_since = now
+                self.mismatch_seconds = (now - self.mismatch_since).total_seconds()
             else:
                 self.mismatch_since = None
                 self.mismatch_seconds = 0.0
@@ -609,7 +671,7 @@ class ClimateSyncCoordinator:
 
         # Rate limiting
         if self.last_service_call_time is not None:
-            elapsed = (dt_util.utcnow() - self.last_service_call_time).total_seconds()
+            elapsed = (now - self.last_service_call_time).total_seconds()
             if elapsed < self._min_send_interval:
                 if bypass_rate_limit:
                     _LOGGER.debug(
@@ -625,37 +687,78 @@ class ClimateSyncCoordinator:
                     )
                     return
 
+        # Offset-specific: min change threshold guard
+        should_write_offset = True
+        if offset_change <= self._offset_min_change:
+            self._offset_threshold_skipped_count += 1
+            should_write_offset = False
+            _LOGGER.debug(
+                "ClimateSync: offset write skipped (offset_min_change=%.2f, change=%.2f)",
+                self._offset_min_change,
+                offset_change,
+            )
+
+        # Offset-specific: min write interval guard
+        if should_write_offset and self._last_offset_write_at is not None:
+            elapsed_since_offset = (now - self._last_offset_write_at).total_seconds()
+            if elapsed_since_offset < self._offset_min_interval_seconds:
+                self._offset_min_interval_blocked_count += 1
+                should_write_offset = False
+                _LOGGER.debug(
+                    "ClimateSync: offset write blocked (offset_min_interval=%.1fs, elapsed=%.1fs)",
+                    self._offset_min_interval_seconds,
+                    elapsed_since_offset,
+                )
+
+        # Target still written if it changed meaningfully
+        should_write_target = target_change > self._min_change_threshold
+
+        if not should_write_offset and not should_write_target:
+            return
+
         self.apply_attempts += 1
         try:
-            # Step 1: set the offset entity
-            domain = self._offset_entity.split(".")[0]
-            await self.hass.services.async_call(
-                domain,
-                "set_value",
-                {"entity_id": self._offset_entity, "value": new_offset},
-                blocking=True,
-            )
-            self.last_applied_offset = new_offset
+            if should_write_offset:
+                # Step 1: set the offset entity
+                domain = self._offset_entity.split(".")[0]
+                await self.hass.services.async_call(
+                    domain,
+                    "set_value",
+                    {"entity_id": self._offset_entity, "value": new_offset},
+                    blocking=True,
+                )
+                self.last_applied_offset = new_offset
+                self._last_offset_write_at = now
+                # Start settling window: ignore source-triggered re-evaluations for a
+                # short period so the source room temperature can stabilise after the
+                # offset is applied (prevents feedback-loop oscillation).
+                self._settling_until = now + timedelta(seconds=self._offset_settle_seconds)
 
-            # Step 2: small delay so the thermostat processes the offset
-            await asyncio.sleep(0.5)
+                # Small delay so the thermostat processes the offset before we set target
+                await asyncio.sleep(0.5)
 
-            # Step 3: set destination target temperature
-            await self.hass.services.async_call(
-                "climate",
-                "set_temperature",
-                {
-                    "entity_id": self._destination_entity,
-                    "temperature": new_target,
-                },
-                blocking=True,
-            )
-            self.last_applied_target = new_target
-            self.last_applied_setpoint = new_target
-            self.last_service_call_time = dt_util.utcnow()
+            if should_write_target:
+                # Set destination target temperature
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {
+                        "entity_id": self._destination_entity,
+                        "temperature": new_target,
+                    },
+                    blocking=True,
+                )
+                self.last_applied_target = new_target
+                self.last_applied_setpoint = new_target
+                self._last_target_write_at = now
+
+            self.last_service_call_time = now
 
             _LOGGER.debug(
-                "ClimateSync: offset mode applied offset=%.2f target=%.2f",
+                "ClimateSync: offset mode applied (offset=%s, target=%s) "
+                "offset=%.2f target=%.2f",
+                "written" if should_write_offset else "skipped",
+                "written" if should_write_target else "skipped",
                 new_offset,
                 new_target,
             )
@@ -668,6 +771,80 @@ class ClimateSyncCoordinator:
                 self._destination_entity,
                 exc,
             )
+
+    def _update_sticky_leader(self, raw_leading: str | None, now: datetime) -> str | None:
+        """Apply sticky-leader hysteresis and return the effective leading room.
+
+        Prevents rapid leader switching when two rooms have nearly equal demand.
+        A new leader is only accepted if it exceeds the current leader's delta by
+        ``_leader_switch_threshold``, OR if it has consistently been the raw leader
+        for at least ``_leader_stick_seconds``.
+        """
+        if raw_leading is None:
+            # Clear candidate; retain current leader in case demand returns soon
+            self._candidate_leading_room = None
+            self._candidate_leading_since = None
+            return None
+
+        # First time: no existing leader, accept immediately
+        if self._current_leading_room is None:
+            self._previous_leading_room = None
+            self._current_leading_room = raw_leading
+            self._candidate_leading_room = None
+            self._candidate_leading_since = None
+            return raw_leading
+
+        # Same as current leader – stable, clear any pending candidate
+        if raw_leading == self._current_leading_room:
+            self._candidate_leading_room = None
+            self._candidate_leading_since = None
+            return raw_leading
+
+        # Different room proposed – apply hysteresis
+        current_delta = self.room_deltas.get(self._current_leading_room, {}).get("delta", 0.0)
+        raw_delta = self.room_deltas.get(raw_leading, {}).get("delta", 0.0)
+        delta_diff = raw_delta - current_delta
+
+        # Immediate switch when the challenger exceeds the current leader by the threshold
+        if delta_diff > self._leader_switch_threshold:
+            _LOGGER.debug(
+                "ClimateSync: leader switched %s → %s (delta_diff=%.2f > threshold=%.2f)",
+                self._current_leading_room,
+                raw_leading,
+                delta_diff,
+                self._leader_switch_threshold,
+            )
+            self._previous_leading_room = self._current_leading_room
+            self._current_leading_room = raw_leading
+            self._candidate_leading_room = None
+            self._candidate_leading_since = None
+            return raw_leading
+
+        # Time-based stickiness: track how long the challenger has been consistently leading
+        if self._candidate_leading_room != raw_leading:
+            # New challenger – start tracking
+            self._candidate_leading_room = raw_leading
+            self._candidate_leading_since = now
+
+        if self._candidate_leading_since is not None:
+            elapsed = (now - self._candidate_leading_since).total_seconds()
+            if elapsed >= self._leader_stick_seconds:
+                _LOGGER.debug(
+                    "ClimateSync: leader switched %s → %s "
+                    "(candidate for %.1fs >= stick_seconds=%.1fs)",
+                    self._current_leading_room,
+                    raw_leading,
+                    elapsed,
+                    self._leader_stick_seconds,
+                )
+                self._previous_leading_room = self._current_leading_room
+                self._current_leading_room = raw_leading
+                self._candidate_leading_room = None
+                self._candidate_leading_since = None
+                return raw_leading
+
+        # Keep current leader (hysteresis in effect)
+        return self._current_leading_room
 
     async def _async_apply_setpoint(
         self, setpoint: float, *, bypass_rate_limit: bool = False
@@ -801,3 +978,52 @@ class ClimateSyncCoordinator:
     def offset_entity(self) -> str | None:
         """Return offset entity id (offset mode only)."""
         return self._offset_entity
+
+    # Offset stabilization diagnostics
+
+    @property
+    def settling_active(self) -> bool:
+        """Return True when the post-offset settling window is active."""
+        if self._settling_until is None:
+            return False
+        return dt_util.utcnow() < self._settling_until
+
+    @property
+    def settling_until(self) -> datetime | None:
+        """Return the UTC time until which the settling window is active."""
+        return self._settling_until
+
+    @property
+    def last_offset_write_time(self) -> datetime | None:
+        """Return the UTC time of the last offset write."""
+        return self._last_offset_write_at
+
+    @property
+    def last_target_write_time(self) -> datetime | None:
+        """Return the UTC time of the last target write."""
+        return self._last_target_write_at
+
+    @property
+    def offset_min_interval_blocked_count(self) -> int:
+        """Return how many offset writes were blocked by the min-interval guard."""
+        return self._offset_min_interval_blocked_count
+
+    @property
+    def offset_threshold_skipped_count(self) -> int:
+        """Return how many offset writes were skipped (change below min-change threshold)."""
+        return self._offset_threshold_skipped_count
+
+    @property
+    def possible_feedback_events(self) -> int:
+        """Return how many possible feedback events were detected."""
+        return self._possible_feedback_events
+
+    @property
+    def current_leading_room(self) -> str | None:
+        """Return the current sticky leader room entity id."""
+        return self._current_leading_room
+
+    @property
+    def previous_leading_room(self) -> str | None:
+        """Return the previous leader before the last switch."""
+        return self._previous_leading_room

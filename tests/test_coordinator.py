@@ -1010,3 +1010,575 @@ async def test_offset_mode_no_offset_entity_configured_sets_status():
 
     assert coord.status == STATUS_OFFSET_ENTITY_UNAVAILABLE
     hass.services.async_call.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Offset Mode stabilization tests
+# ---------------------------------------------------------------------------
+
+from custom_components.climatesync.const import (  # noqa: E402
+    CONF_OFFSET_SETTLE_SECONDS,
+    CONF_OFFSET_MIN_CHANGE,
+    CONF_OFFSET_MIN_INTERVAL_SECONDS,
+    CONF_LEADER_SWITCH_THRESHOLD,
+    CONF_LEADER_STICK_SECONDS,
+    DEFAULT_OFFSET_SETTLE_SECONDS,
+    DEFAULT_OFFSET_MIN_CHANGE,
+    DEFAULT_OFFSET_MIN_INTERVAL_SECONDS,
+    DEFAULT_LEADER_SWITCH_THRESHOLD,
+    DEFAULT_LEADER_STICK_SECONDS,
+)
+
+
+def _build_offset_coordinator_stable(
+    *,
+    source_entities: list[str] | None = None,
+    destination_entity: str = "climate.dest",
+    idle_temperature: float = DEFAULT_IDLE_TEMPERATURE,
+    max_setpoint: float = DEFAULT_MAX_SETPOINT,
+    min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
+    min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
+    offset_entity: str = "number.dest_offset",
+    rounding_mode: str = DEFAULT_ROUNDING_MODE,
+    offset_settle_seconds: float = DEFAULT_OFFSET_SETTLE_SECONDS,
+    offset_min_change: float = DEFAULT_OFFSET_MIN_CHANGE,
+    offset_min_interval_seconds: float = DEFAULT_OFFSET_MIN_INTERVAL_SECONDS,
+    leader_switch_threshold: float = DEFAULT_LEADER_SWITCH_THRESHOLD,
+    leader_stick_seconds: float = DEFAULT_LEADER_STICK_SECONDS,
+) -> tuple[ClimateSyncCoordinator, MagicMock]:
+    """Build an offset-mode coordinator with stabilization settings."""
+    coord, hass = _build_offset_coordinator(
+        source_entities=source_entities,
+        destination_entity=destination_entity,
+        idle_temperature=idle_temperature,
+        max_setpoint=max_setpoint,
+        min_change_threshold=min_change_threshold,
+        min_send_interval=min_send_interval,
+        offset_entity=offset_entity,
+        rounding_mode=rounding_mode,
+    )
+    coord._offset_settle_seconds = float(offset_settle_seconds)
+    coord._offset_min_change = float(offset_min_change)
+    coord._offset_min_interval_seconds = float(offset_min_interval_seconds)
+    coord._leader_switch_threshold = float(leader_switch_threshold)
+    coord._leader_stick_seconds = float(leader_stick_seconds)
+    return coord, hass
+
+
+# ── Settling window ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_offset_settling_window_blocks_source_triggered_eval():
+    """Source-triggered eval during settling window should be skipped and counted."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_settle_seconds=10,  # 10 second window
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t1 = t0 + timedelta(seconds=2)  # still inside settling window
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        # First eval: writes offset, starts settling window
+        await coord._async_evaluate()
+
+    assert hass.services.async_call.call_count == 2  # offset + target written
+    assert coord._last_offset_write_at == t0
+    assert coord._settling_until == t0 + timedelta(seconds=10)
+    assert coord._possible_feedback_events == 0
+
+    hass.services.async_call.reset_mock()
+
+    # Second eval: source-triggered (bypass_rate_limit=False), within settling window
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t1)
+        await coord._async_evaluate(bypass_rate_limit=False)
+
+    # No writes should have happened during settling
+    hass.services.async_call.assert_not_called()
+    assert coord._possible_feedback_events == 1
+
+
+@pytest.mark.asyncio
+async def test_offset_settling_window_does_not_block_destination_triggered():
+    """Destination-triggered eval (bypass=True) bypasses the settling window."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_settle_seconds=30,
+        min_send_interval=0,  # no rate limit
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t1 = t0 + timedelta(seconds=2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    assert coord._settling_until == t0 + timedelta(seconds=30)
+    hass.services.async_call.reset_mock()
+
+    # Destination-triggered eval bypasses settling
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t1)
+        await coord._async_evaluate(bypass_rate_limit=True)
+
+    # Writes should still happen (bypass=True skips settling check)
+    assert hass.services.async_call.call_count > 0
+    assert coord._possible_feedback_events == 0
+
+
+@pytest.mark.asyncio
+async def test_offset_settling_window_expires():
+    """After the settling window expires, source-triggered evals proceed normally."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_settle_seconds=5,
+        min_send_interval=0,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t_expired = t0 + timedelta(seconds=6)  # after window
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    assert coord._settling_until == t0 + timedelta(seconds=5)
+    hass.services.async_call.reset_mock()
+
+    # Source-triggered eval after settling window expires
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t_expired)
+        await coord._async_evaluate(bypass_rate_limit=False)
+
+    # Should proceed normally (settling expired)
+    assert coord._possible_feedback_events == 0
+
+
+# ── Offset min change threshold ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_offset_min_change_blocks_small_offset_write():
+    """Offset write is skipped when change is below offset_min_change threshold."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,   # low combined threshold so anti-flap passes
+        offset_min_change=0.5,       # high offset-specific threshold
+        offset_min_interval_seconds=0,
+    )
+
+    # Room delta forces a small offset change (< 0.5) but large target change (> 0.05)
+    # Dest: reported=20.0, offset=0.0 → real=20.0
+    # Room: current=20.3, target=22.0 → desired_offset = 20.3 - 20.0 = 0.3 (< 0.5 threshold)
+    # target_change = |22.0 - 5.0| = 17.0 → large, will be written
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.3, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    # offset_threshold_skipped_count should increment
+    assert coord._offset_threshold_skipped_count == 1
+    # The offset set_value call must NOT have been made
+    calls = hass.services.async_call.call_args_list
+    for call in calls:
+        assert call[0][1] != "set_value", "Offset must not be written (below min_change)"
+    # But the target should still be written
+    climate_calls = [c for c in calls if c[0][0] == "climate"]
+    assert len(climate_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_offset_min_change_allows_large_offset_write():
+    """Offset write proceeds when change exceeds offset_min_change threshold."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_min_change=0.2,
+        offset_min_interval_seconds=0,
+    )
+
+    # Offset change = 2.0 - 0.0 = 2.0 > 0.2 threshold → write allowed
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord._offset_threshold_skipped_count == 0
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 2
+    assert calls[0][0][1] == "set_value"  # offset written
+
+
+# ── Offset min write interval ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_offset_min_interval_blocks_too_frequent_writes():
+    """Offset write is blocked when min interval hasn't elapsed since last write."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_min_change=0.05,   # low, so change threshold won't block
+        offset_min_interval_seconds=30,
+        min_send_interval=0,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t5s = t0 + timedelta(seconds=5)   # within 30s interval
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    assert hass.services.async_call.call_count == 2  # first write OK
+    hass.services.async_call.reset_mock()
+
+    # Second eval 5 seconds later: min interval not yet elapsed
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t5s)
+        await coord._async_evaluate(bypass_rate_limit=True)  # bypass general rate limit
+
+    # Offset write should be blocked
+    assert coord._offset_min_interval_blocked_count == 1
+    calls = hass.services.async_call.call_args_list
+    for call in calls:
+        assert call[0][1] != "set_value", "Offset must not be written within min interval"
+
+
+@pytest.mark.asyncio
+async def test_offset_min_interval_allows_after_expiry():
+    """Offset write is allowed once the min interval has elapsed."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_min_change=0.05,
+        offset_min_interval_seconds=10,
+        min_send_interval=0,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t15s = t0 + timedelta(seconds=15)  # beyond 10s interval
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    hass.services.async_call.reset_mock()
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t15s)
+        await coord._async_evaluate(bypass_rate_limit=True)
+
+    assert coord._offset_min_interval_blocked_count == 0
+    calls = hass.services.async_call.call_args_list
+    assert any(c[0][1] == "set_value" for c in calls), "Offset write expected after interval"
+
+
+# ── Sticky leader hysteresis ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_sticky_leader_prevents_switch_below_threshold():
+    """Leader does not switch when the new candidate doesn't exceed the threshold."""
+    coord, hass = _build_offset_coordinator_stable(
+        source_entities=["climate.room1", "climate.room2"],
+        min_change_threshold=0.05,
+        offset_min_change=0.05,
+        offset_min_interval_seconds=0,
+        leader_switch_threshold=0.5,   # high threshold
+        leader_stick_seconds=3600,     # very long stick time
+    )
+
+    # Initial eval: room1 is leading (delta 1.0)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.0, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord._current_leading_room == "climate.room1"
+    initial_leading = coord.leading_room
+
+    hass.services.async_call.reset_mock()
+
+    # Second eval: room2 leads by 0.3 (below 0.5 threshold, no stick time yet)
+    # room2 delta = 0.8, room1 delta = 0.5 → diff = 0.3 < threshold 0.5
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.2, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    # Leader should still be room1 (hysteresis kept it)
+    assert coord._current_leading_room == "climate.room1"
+
+
+@pytest.mark.asyncio
+async def test_sticky_leader_switches_when_exceeds_threshold():
+    """Leader switches immediately when new room exceeds by more than the threshold."""
+    coord, hass = _build_offset_coordinator_stable(
+        source_entities=["climate.room1", "climate.room2"],
+        min_change_threshold=0.05,
+        offset_min_change=0.05,
+        offset_min_interval_seconds=0,
+        leader_switch_threshold=0.3,   # threshold
+        leader_stick_seconds=3600,
+    )
+
+    # Initial eval: room1 is leading (delta 1.0)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.0, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+    assert coord._current_leading_room == "climate.room1"
+
+    hass.services.async_call.reset_mock()
+
+    # Second eval: room2 leads by 1.5 (>> 0.3 threshold) → immediate switch
+    # room2 delta = 2.5, room1 delta = 0.5 → diff = 2.0 > threshold 0.3
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=17.5, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    await coord._async_evaluate()
+
+    # Leader should now be room2
+    assert coord._current_leading_room == "climate.room2"
+    assert coord._previous_leading_room == "climate.room1"
+
+
+@pytest.mark.asyncio
+async def test_sticky_leader_switches_after_stick_seconds():
+    """Leader switches after the candidate has been consistently leading for stick_seconds."""
+    coord, hass = _build_offset_coordinator_stable(
+        source_entities=["climate.room1", "climate.room2"],
+        min_change_threshold=0.05,
+        offset_min_change=0.05,
+        offset_min_interval_seconds=0,
+        leader_switch_threshold=1.0,   # high threshold, won't trigger immediately
+        leader_stick_seconds=30,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t35s = t0 + timedelta(seconds=35)  # beyond stick time
+
+    # Initial eval: room1 is leading
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.0, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    assert coord._current_leading_room == "climate.room1"
+
+    # room2 leads by 0.3 (below 1.0 threshold) from t0 onwards
+    # After 35s candidate timer, room2 should take over
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.2, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        # First eval to start candidate timer
+        await coord._async_evaluate()
+
+    assert coord._candidate_leading_room == "climate.room2"
+    assert coord._current_leading_room == "climate.room1"  # not yet switched
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t35s)
+        await coord._async_evaluate()
+
+    # Now the candidate timer has expired → switch
+    assert coord._current_leading_room == "climate.room2"
+
+
+@pytest.mark.asyncio
+async def test_sticky_leader_candidate_resets_when_raw_leader_changes():
+    """Candidate timer resets if a different room becomes the raw leader."""
+    coord, hass = _build_offset_coordinator_stable(
+        source_entities=["climate.room1", "climate.room2", "climate.room3"],
+        min_change_threshold=0.05,
+        offset_min_change=0.05,
+        offset_min_interval_seconds=0,
+        leader_switch_threshold=1.0,   # high, no immediate switch
+        leader_stick_seconds=30,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+
+    # Establish room1 as leader
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.room3": _make_state(current_temperature=19.8, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    assert coord._current_leading_room == "climate.room1"
+
+    # room2 slightly leads (starts candidate timer)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.2, target_temperature=20.0),
+        "climate.room3": _make_state(current_temperature=19.8, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    t5 = t0 + timedelta(seconds=5)
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t5)
+        await coord._async_evaluate()
+
+    assert coord._candidate_leading_room == "climate.room2"
+    candidate_since = coord._candidate_leading_since
+
+    # Now room3 suddenly leads instead of room2 (resets candidate)
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=19.5, target_temperature=20.0),
+        "climate.room2": _make_state(current_temperature=19.8, target_temperature=20.0),
+        "climate.room3": _make_state(current_temperature=19.1, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    t10 = t0 + timedelta(seconds=10)
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t10)
+        await coord._async_evaluate()
+
+    # Candidate should have changed to room3, timer reset
+    assert coord._candidate_leading_room == "climate.room3"
+    assert coord._candidate_leading_since != candidate_since  # reset
+    assert coord._current_leading_room == "climate.room1"  # still room1
+
+
+# ── Diagnostic properties ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_offset_stabilization_diagnostics_exposed():
+    """All stabilization diagnostic properties are accessible on the coordinator."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_settle_seconds=5,
+        offset_min_change=0.05,
+        offset_min_interval_seconds=0,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    # Verify diagnostic properties
+    assert coord.last_offset_write_time == t0
+    assert coord.last_target_write_time == t0
+    assert coord.settling_until == t0 + timedelta(seconds=5)
+    assert coord.settling_active is True  # still inside window at t0
+    assert coord.possible_feedback_events == 0
+    assert coord.offset_min_interval_blocked_count == 0
+    assert coord.offset_threshold_skipped_count == 0
+    assert coord.current_leading_room == "climate.room1"
+    assert coord.previous_leading_room is None  # first time
+
+
+@pytest.mark.asyncio
+async def test_possible_feedback_events_counted():
+    """possible_feedback_events increments on source evals during settling window."""
+    coord, hass = _build_offset_coordinator_stable(
+        min_change_threshold=0.05,
+        offset_settle_seconds=10,
+    )
+
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t1 = t0 + timedelta(seconds=1)
+    t2 = t0 + timedelta(seconds=2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
+    assert coord._possible_feedback_events == 0
+
+    # Two source-triggered evals within settling window
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t1)
+        await coord._async_evaluate(bypass_rate_limit=False)
+
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t2)
+        await coord._async_evaluate(bypass_rate_limit=False)
+
+    assert coord._possible_feedback_events == 2
+    assert coord.possible_feedback_events == 2

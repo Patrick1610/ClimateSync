@@ -13,19 +13,29 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
+    CONF_LEADER_STICK_SECONDS,
+    CONF_LEADER_SWITCH_THRESHOLD,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_MODE,
     CONF_OFFSET_ENTITY,
+    CONF_OFFSET_MIN_CHANGE,
+    CONF_OFFSET_MIN_INTERVAL_SECONDS,
+    CONF_OFFSET_SETTLE_SECONDS,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
+    DEFAULT_LEADER_STICK_SECONDS,
+    DEFAULT_LEADER_SWITCH_THRESHOLD,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_MODE,
+    DEFAULT_OFFSET_MIN_CHANGE,
+    DEFAULT_OFFSET_MIN_INTERVAL_SECONDS,
+    DEFAULT_OFFSET_SETTLE_SECONDS,
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_MODE,
     DOMAIN,
@@ -85,6 +95,11 @@ def _destination_schema(
     include_advanced: bool = False,
     include_offset_entity: bool = False,
     default_offset_entity: str | None = None,
+    default_offset_settle_seconds: int = DEFAULT_OFFSET_SETTLE_SECONDS,
+    default_offset_min_change: float = DEFAULT_OFFSET_MIN_CHANGE,
+    default_offset_min_interval: int = DEFAULT_OFFSET_MIN_INTERVAL_SECONDS,
+    default_leader_switch_threshold: float = DEFAULT_LEADER_SWITCH_THRESHOLD,
+    default_leader_stick_seconds: int = DEFAULT_LEADER_STICK_SECONDS,
 ) -> vol.Schema:
     fields: dict = {
         vol.Required(CONF_DESTINATION_ENTITY, default=default_dest): selector.selector(
@@ -169,6 +184,71 @@ def _destination_schema(
                 {
                     "number": {
                         "min": 1,
+                        "max": 300,
+                        "step": 1,
+                        "mode": "box",
+                        "unit_of_measurement": "s",
+                    }
+                }
+            )
+        )
+        fields[vol.Required(CONF_OFFSET_SETTLE_SECONDS, default=default_offset_settle_seconds)] = (
+            selector.selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 30,
+                        "step": 1,
+                        "mode": "box",
+                        "unit_of_measurement": "s",
+                    }
+                }
+            )
+        )
+        fields[vol.Required(CONF_OFFSET_MIN_CHANGE, default=default_offset_min_change)] = (
+            selector.selector(
+                {
+                    "number": {
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.05,
+                        "mode": "box",
+                        "unit_of_measurement": "°C",
+                    }
+                }
+            )
+        )
+        fields[vol.Required(CONF_OFFSET_MIN_INTERVAL_SECONDS, default=default_offset_min_interval)] = (
+            selector.selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 120,
+                        "step": 1,
+                        "mode": "box",
+                        "unit_of_measurement": "s",
+                    }
+                }
+            )
+        )
+        fields[vol.Required(CONF_LEADER_SWITCH_THRESHOLD, default=default_leader_switch_threshold)] = (
+            selector.selector(
+                {
+                    "number": {
+                        "min": 0.0,
+                        "max": 5.0,
+                        "step": 0.1,
+                        "mode": "box",
+                        "unit_of_measurement": "°C",
+                    }
+                }
+            )
+        )
+        fields[vol.Required(CONF_LEADER_STICK_SECONDS, default=default_leader_stick_seconds)] = (
+            selector.selector(
+                {
+                    "number": {
+                        "min": 0,
                         "max": 300,
                         "step": 1,
                         "mode": "box",
@@ -352,6 +432,11 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                     CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
                     CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
                     CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
+                    CONF_OFFSET_SETTLE_SECONDS: user_input[CONF_OFFSET_SETTLE_SECONDS],
+                    CONF_OFFSET_MIN_CHANGE: user_input[CONF_OFFSET_MIN_CHANGE],
+                    CONF_OFFSET_MIN_INTERVAL_SECONDS: user_input[CONF_OFFSET_MIN_INTERVAL_SECONDS],
+                    CONF_LEADER_SWITCH_THRESHOLD: user_input[CONF_LEADER_SWITCH_THRESHOLD],
+                    CONF_LEADER_STICK_SECONDS: user_input[CONF_LEADER_STICK_SECONDS],
                     CONF_MODE: self._mode,
                 }
                 if self._mode == MODE_OFFSET:
@@ -371,6 +456,21 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 ),
                 default_send_interval=self._get(
                     CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL
+                ),
+                default_offset_settle_seconds=self._get(
+                    CONF_OFFSET_SETTLE_SECONDS, DEFAULT_OFFSET_SETTLE_SECONDS
+                ),
+                default_offset_min_change=self._get(
+                    CONF_OFFSET_MIN_CHANGE, DEFAULT_OFFSET_MIN_CHANGE
+                ),
+                default_offset_min_interval=self._get(
+                    CONF_OFFSET_MIN_INTERVAL_SECONDS, DEFAULT_OFFSET_MIN_INTERVAL_SECONDS
+                ),
+                default_leader_switch_threshold=self._get(
+                    CONF_LEADER_SWITCH_THRESHOLD, DEFAULT_LEADER_SWITCH_THRESHOLD
+                ),
+                default_leader_stick_seconds=self._get(
+                    CONF_LEADER_STICK_SECONDS, DEFAULT_LEADER_STICK_SECONDS
                 ),
                 include_advanced=True,
                 include_offset_entity=(self._mode == MODE_OFFSET),

@@ -167,6 +167,11 @@ After setup, open the integration → **Configure** (⚙ gear icon) to get the s
 | Resync interval | 60 s | How often ClimateSync checks even without state changes. |
 | Minimum change threshold | 0.2 °C | Only send a new setpoint if the change exceeds this. |
 | Minimum send interval | 10 s | At most one service call sequence per this many seconds. |
+| Offset settling window | 3 s | *(Offset Mode)* Ignore source-triggered re-evaluations for this many seconds after an offset write. |
+| Offset minimum change | 0.2 °C | *(Offset Mode)* Minimum offset change required to trigger a write. |
+| Offset minimum interval | 10 s | *(Offset Mode)* Minimum time between consecutive offset writes. |
+| Leader switch threshold | 0.3 °C | *(Offset Mode)* Challenger must exceed current leader's delta by this amount to switch immediately. |
+| Leader stick seconds | 30 s | *(Offset Mode)* Challenger that remains highest delta for this long takes over as leader. |
 
 ---
 
@@ -217,7 +222,70 @@ Else:
     climate.set_temperature(destination, new_target)
 ```
 
-### Rounding modes
+---
+
+### Offset Mode — Stability Safeguards
+
+In some setups a source room's reported temperature may **indirectly depend on the destination thermostat** itself (for example because a calculated "zone temperature" partially incorporates the destination sensor's reading). This can create a short feedback loop:
+
+1. ClimateSync writes a new offset to the destination thermostat.
+2. The thermostat adjusts its reported current temperature almost immediately.
+3. That temperature change triggers a source room recalculation.
+4. The source room's delta changes — ClimateSync evaluates again.
+5. A new offset is written — back to step 2.
+
+The result is rapid oscillation ("thrashing") of the offset and target values. ClimateSync includes five independent safeguards against this, all tunable in the Options Flow.
+
+#### 1. Settling window (`offset_settle_seconds`, default 3 s)
+
+After a successful offset write, ClimateSync ignores **source-triggered** re-evaluations for a short settling period. During this window the physical temperatures are still settling and any delta change is most likely caused by the offset write itself rather than a genuine demand change.
+
+Destination-triggered evaluations (i.e. the destination thermostat reporting an unexpected target value) always bypass this window.
+
+#### 2. Sticky leading room (`leader_switch_threshold`, `leader_stick_seconds`, defaults 0.3 °C / 30 s)
+
+ClimateSync does not immediately switch the leading room every time a slightly different room claims the highest delta. A new room is only accepted as the new leader if either:
+
+- its delta exceeds the current leader's delta by more than `leader_switch_threshold` (immediate switch), **or**
+- it has consistently been the raw leader for at least `leader_stick_seconds` (time-based switch).
+
+This prevents constant leader flip-flopping between rooms with nearly identical demand.
+
+#### 3. Offset write threshold (`offset_min_change`, default 0.2 °C)
+
+A new offset value is only written to the thermostat if the difference between the desired offset and the current offset exceeds `offset_min_change`. Sub-threshold changes are silently skipped. The target temperature write is still evaluated independently.
+
+#### 4. Offset write cooldown (`offset_min_interval_seconds`, default 10 s)
+
+Even when a new offset value passes all other checks, it is not written again if the last offset write happened less than `offset_min_interval_seconds` ago. This acts as a hard cooldown between consecutive offset writes.
+
+#### Summary of new Options Flow settings
+
+| Option | Default | Range | Description |
+|---|---|---|---|
+| `offset_settle_seconds` | 3 s | 0 – 30 s | Post-write settling window. Source-triggered evals are ignored during this period. |
+| `offset_min_change` | 0.2 °C | 0.0 – 2.0 °C | Minimum offset change to trigger a write. |
+| `offset_min_interval_seconds` | 10 s | 0 – 120 s | Minimum time between consecutive offset writes. |
+| `leader_switch_threshold` | 0.3 °C | 0.0 – 5.0 °C | New leader must exceed current leader by this delta to switch immediately. |
+| `leader_stick_seconds` | 30 s | 0 – 300 s | Alternatively, a challenger that remains the raw leader for this long is accepted. |
+
+#### Diagnostic attributes (loop-aware)
+
+The `sensor.climatesync_status` entity exposes additional attributes when Offset Mode is active:
+
+| Attribute | Description |
+|---|---|
+| `settling_active` | `true` when the post-write settling window is currently active. |
+| `settling_until` | ISO-8601 timestamp when the settling window expires. |
+| `last_offset_write_time` | Timestamp of the most recent successful offset write. |
+| `last_target_write_time` | Timestamp of the most recent successful target write. |
+| `offset_min_interval_blocked_count` | How many offset writes were suppressed by the cooldown guard. |
+| `offset_threshold_skipped_count` | How many offset writes were skipped because the change was below `offset_min_change`. |
+| `possible_feedback_events` | How many source-triggered evaluations occurred during a settling window (potential feedback loop detections). |
+| `current_leading_room` | The currently active (sticky) leading room entity id. |
+| `previous_leading_room` | The entity id of the room that was leader before the last switch. |
+
+
 
 | Mode | Example input | Result |
 |---|---|---|
@@ -321,6 +389,15 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `last_applied_offset` | Last offset value successfully written |
 | `desired_target` | Target temperature computed for this cycle |
 | `last_applied_target` | Last target temperature successfully written |
+| `settling_active` | `true` when the post-write settling window is active |
+| `settling_until` | ISO timestamp when settling window expires |
+| `last_offset_write_time` | Timestamp of most recent offset write |
+| `last_target_write_time` | Timestamp of most recent target write |
+| `offset_min_interval_blocked_count` | Offset writes suppressed by cooldown guard |
+| `offset_threshold_skipped_count` | Offset writes skipped (change below threshold) |
+| `possible_feedback_events` | Source evals blocked during settling window (feedback events) |
+| `current_leading_room` | Currently active sticky leading room |
+| `previous_leading_room` | Previous leading room before last switch |
 
 ---
 
