@@ -1643,6 +1643,9 @@ async def test_idle_offset_reset_count_increments_each_reset():
         min_change_threshold=0.05,
     )
 
+    t0 = datetime(2024, 1, 1, 12, 0, 0)
+    t1 = t0 + timedelta(seconds=30)
+
     # First idle evaluation with non-zero offset
     _configure_states(hass, {
         "climate.room1": _make_state(current_temperature=21.0, target_temperature=21.0),
@@ -1650,7 +1653,10 @@ async def test_idle_offset_reset_count_increments_each_reset():
         "number.dest_offset": _make_number_state(-1.5),
     })
 
-    await coord._async_evaluate()
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t0)
+        await coord._async_evaluate()
+
     assert coord.idle_offset_reset_count == 1
     assert coord.last_idle_offset_reset_time is not None
     first_reset_time = coord.last_idle_offset_reset_time
@@ -1662,8 +1668,14 @@ async def test_idle_offset_reset_count_increments_each_reset():
         "number.dest_offset": _make_number_state(-1.5),
     })
 
-    await coord._async_evaluate()
+    with patch("custom_components.climatesync.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow = MagicMock(return_value=t1)
+        await coord._async_evaluate()
+
     assert coord.idle_offset_reset_count == 2
+    # Timestamp must also be updated on each reset
+    assert coord.last_idle_offset_reset_time is not None
+    assert coord.last_idle_offset_reset_time != first_reset_time
 
 
 @pytest.mark.asyncio
@@ -1745,6 +1757,7 @@ async def test_idle_offset_reset_failure_sets_apply_failed_status():
     assert coord.status == STATUS_APPLY_FAILED
     assert coord.apply_failures == 1
     assert coord.idle_offset_reset_count == 0
+    assert coord.last_idle_offset_reset_time is None
 
 
 @pytest.mark.asyncio
@@ -1806,3 +1819,83 @@ async def test_idle_offset_reset_last_applied_offset_set_to_zero():
 
     assert coord.last_applied_offset == 0.0
     assert coord._last_offset_write_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Anti-bouncing tests (offset entity not watched + evaluation gate)
+# ---------------------------------------------------------------------------
+
+def test_offset_entity_not_in_watch_list():
+    """Offset entity must NOT be included in the state-listener watch list.
+
+    Watching the offset entity would make every ClimateSync-triggered offset
+    write fire a new evaluation, creating a self-reinforcing feedback loop
+    (the "bouncing" symptom observed in the Plugwise Emma activity log).
+    """
+    coord, hass = _build_offset_coordinator(
+        offset_entity="number.dest_offset",
+    )
+
+    watched: list[str] = []
+
+    def _capture_entities(hass_arg, entity_ids, callback_fn):
+        watched.extend(entity_ids)
+        return MagicMock()  # unsub callable
+
+    _mock_ha.helpers.event.async_track_state_change_event = _capture_entities
+    _mock_ha.helpers.event.async_track_time_interval = MagicMock(return_value=MagicMock())
+
+    coord._setup_listeners()
+
+    assert "number.dest_offset" not in watched, (
+        "Offset entity must not be in the watch list to prevent the feedback loop"
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_evaluations_are_dropped():
+    """When an evaluation is already running, a concurrent one must be dropped.
+
+    This prevents the race condition where two coroutines both pass the
+    settling-window check before either has set _settling_until, causing both
+    to write the offset entity and produce rapid offset bouncing.
+    """
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    # Acquire the lock manually to simulate an in-progress evaluation.
+    await coord._evaluation_lock.acquire()
+    try:
+        # Attempting a second evaluation while the lock is held must return immediately
+        # (drop-on-busy) and must NOT call any service.
+        await coord._async_evaluate()
+        hass.services.async_call.assert_not_called()
+    finally:
+        coord._evaluation_lock.release()
+
+
+@pytest.mark.asyncio
+async def test_evaluation_proceeds_when_no_concurrent_evaluation():
+    """Normal evaluation must still proceed when no other evaluation is in progress."""
+    coord, hass = _build_offset_coordinator(
+        min_change_threshold=0.05,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=18.0, target_temperature=20.0),
+        "climate.dest": _make_state(current_temperature=19.5, target_temperature=5.0),
+        "number.dest_offset": _make_number_state(0.0),
+    })
+
+    # Lock is not held → evaluation must complete normally.
+    assert not coord._evaluation_lock.locked()
+    await coord._async_evaluate()
+    # Service calls should have been made (offset + target)
+    assert hass.services.async_call.call_count == 2

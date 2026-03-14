@@ -147,6 +147,13 @@ class ClimateSyncCoordinator:
         self._idle_offset_reset_count: int = 0
         self._last_idle_offset_reset_time: datetime | None = None
 
+        # Evaluation gate: prevents concurrent evaluations from racing each other.
+        # Two coroutines scheduled at the same time can both pass the settling-window
+        # check before either one has set _settling_until, resulting in both writing
+        # the offset entity (the "bouncing" symptom).  If an evaluation is already
+        # in progress, a new one is dropped; the periodic resync will catch up.
+        self._evaluation_lock = asyncio.Lock()
+
         # Diagnostics
         self.status: str = STATUS_OK
         self.last_update_time: datetime | None = None
@@ -280,8 +287,10 @@ class ClimateSyncCoordinator:
         entities_to_watch = list(self._source_entities)
         if self._destination_entity:
             entities_to_watch.append(self._destination_entity)
-        if self._offset_entity:
-            entities_to_watch.append(self._offset_entity)
+        # NOTE: The offset entity is intentionally NOT watched.  ClimateSync writes
+        # to it; watching it would cause every write to trigger a re-evaluation,
+        # creating a self-reinforcing feedback loop that manifests as rapid offset
+        # "bouncing".  The current offset value is read fresh on every evaluation.
 
         @callback
         def _handle_state_change(event: Any) -> None:
@@ -329,6 +338,21 @@ class ClimateSyncCoordinator:
 
     async def _async_evaluate(self, *, bypass_rate_limit: bool = False) -> None:
         """Compute deltas, setpoint, and apply if needed."""
+        # Drop concurrent evaluations: if one is already running, skip this one.
+        # This prevents a race condition where two coroutines both pass the
+        # settling-window check before either has set _settling_until, causing both
+        # to write the offset entity at the same moment (the "bouncing" symptom).
+        if self._evaluation_lock.locked():
+            _LOGGER.debug(
+                "ClimateSync: evaluation skipped – another evaluation is already in progress"
+            )
+            return
+
+        async with self._evaluation_lock:
+            await self._async_evaluate_inner(bypass_rate_limit=bypass_rate_limit)
+
+    async def _async_evaluate_inner(self, *, bypass_rate_limit: bool = False) -> None:
+        """Inner evaluation body, always runs single-threaded via _evaluation_lock."""
         self.last_update_time = dt_util.utcnow()
         self.evaluation_count += 1
         has_missing = False
