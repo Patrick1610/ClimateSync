@@ -326,4 +326,25 @@ class StatusSensor(_ClimateSyncBaseSensor):
         attrs["desired_target"] = coord.desired_target
         attrs["last_applied_target"] = coord.last_applied_target
 
+        # Offset Mode stabilization diagnostics
+        attrs["settling_active"] = coord.settling_active
+        attrs["settling_until"] = (
+            coord.settling_until.isoformat() if coord.settling_until else None
+        )
+        attrs["last_offset_write_time"] = (
+            coord.last_offset_write_time.isoformat()
+            if coord.last_offset_write_time
+            else None
+        )
+        attrs["last_target_write_time"] = (
+            coord.last_target_write_time.isoformat()
+            if coord.last_target_write_time
+            else None
+        )
+        attrs["offset_min_interval_blocked_count"] = coord.offset_min_interval_blocked_count
+        attrs["offset_threshold_skipped_count"] = coord.offset_threshold_skipped_count
+        attrs["possible_feedback_events"] = coord.possible_feedback_events
+        attrs["current_leading_room"] = coord.current_leading_room
+        attrs["previous_leading_room"] = coord.previous_leading_room
+
         return attrs
