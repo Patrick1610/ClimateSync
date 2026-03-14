@@ -209,7 +209,9 @@ leading_room = room with delta_max
 
 If delta_max <= 0:
     climate.set_temperature(destination, idle_temperature)
-    # offset is NOT reset
+    if abs(current_offset) > offset_min_change:
+        wait 500 ms
+        number.set_value(offset_entity, 0)  # reset to neutral baseline
 Else:
     current_offset       = number state of offset_entity
     dest_real_current    = destination_reported_current - current_offset
@@ -284,6 +286,33 @@ The `sensor.climatesync_status` entity exposes additional attributes when Offset
 | `possible_feedback_events` | How many source-triggered evaluations occurred during a settling window (potential feedback loop detections). |
 | `current_leading_room` | The currently active (sticky) leading room entity id. |
 | `previous_leading_room` | The entity id of the room that was leader before the last switch. |
+| `offset_reset_on_idle_enabled` | Always `true` — indicates that idle offset reset is active. |
+| `idle_offset_reset_count` | Total number of times the offset has been reset to 0 on idle. |
+| `last_idle_offset_reset_time` | ISO-8601 timestamp of the most recent idle offset reset. |
+
+### Offset Mode — Idle Offset Reset
+
+When all room deltas drop to zero (or below), ClimateSync sets the destination thermostat target to the configured idle temperature. In Offset Mode, it also **resets the offset entity back to 0** — provided the current offset is meaningfully non-zero (i.e. greater than `offset_min_change`).
+
+#### Why this matters
+
+During active heating ClimateSync writes a non-zero offset so the destination thermostat perceives the leading room's temperature instead of its own. When demand ends, the thermostat target is set to idle, but without resetting the offset the thermostat remains in a *manipulated* state:
+
+- Its reported `current_temperature` still reflects the artificially shifted value.
+- After a Home Assistant restart or integration reload the offset persists, creating an incorrect baseline for the next heating cycle.
+- Debugging is harder because the destination appears offset even though no room is actively calling for heat.
+
+By resetting the offset to 0 when idle, ClimateSync ensures the destination thermostat returns to a **neutral, unmanipulated baseline** between heating cycles.
+
+#### Write order
+
+The idle offset reset always follows this sequence to avoid a transient spike:
+
+1. `climate.set_temperature(destination, idle_temperature)` — target goes to idle first.
+2. Wait 500 ms.
+3. `number.set_value(offset_entity, 0)` (or `input_number.set_value`) — offset reset to 0.
+
+The offset is **never** reset before the idle target is set.
 
 
 

@@ -347,4 +347,13 @@ class StatusSensor(_ClimateSyncBaseSensor):
         attrs["current_leading_room"] = coord.current_leading_room
         attrs["previous_leading_room"] = coord.previous_leading_room
 
+        # Idle offset reset diagnostics
+        attrs["offset_reset_on_idle_enabled"] = True
+        attrs["idle_offset_reset_count"] = coord.idle_offset_reset_count
+        attrs["last_idle_offset_reset_time"] = (
+            coord.last_idle_offset_reset_time.isoformat()
+            if coord.last_idle_offset_reset_time
+            else None
+        )
+
         return attrs
