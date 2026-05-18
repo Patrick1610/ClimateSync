@@ -10,12 +10,13 @@
       },
       "destination": {
         "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Select the thermostat that ClimateSync will control. The **idle temperature** is used when no room needs heating. The **maximum setpoint** caps how high ClimateSync will ever set the destination (prevents runaway spikes). The **rounding mode** determines how the setpoint is rounded before being sent.",
+        "description": "Select the thermostat that ClimateSync will control. The **idle temperature** is used when no room needs heating. The **maximum setpoint** caps how high ClimateSync will ever set the destination (prevents runaway spikes). The **rounding mode** determines the step size; the **rounding direction** determines floor, nearest, or ceiling.",
         "data": {
           "destination_entity": "Destination thermostat",
           "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
           "max_setpoint": "Maximum setpoint (°C) – hard ceiling for the destination setpoint",
-          "rounding_mode": "Rounding mode for the setpoint"
+          "rounding_mode": "Rounding mode for the setpoint",
+          "rounding_direction": "Rounding direction"
         }
       }
     },
@@ -36,12 +37,13 @@
       },
       "destination": {
         "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Change the destination thermostat and adjust all settings. **Maximum setpoint**: hard ceiling to prevent runaway spikes. **Resync interval**: how often ClimateSync checks even without changes. **Min change threshold**: smallest setpoint change worth sending. **Min send interval**: minimum seconds between two service calls (rate limiter).",
+        "description": "Change the destination thermostat and adjust all settings. **Maximum setpoint**: hard ceiling to prevent runaway spikes. **Rounding mode**: step size. **Rounding direction**: floor, nearest, or ceiling. **Resync interval**: how often ClimateSync checks even without changes. **Min change threshold**: smallest setpoint change worth sending. **Min send interval**: minimum seconds between two service calls (rate limiter).",
         "data": {
           "destination_entity": "Destination thermostat",
           "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
           "max_setpoint": "Maximum setpoint (°C) – hard ceiling for the destination setpoint",
           "rounding_mode": "Rounding mode for the setpoint",
+          "rounding_direction": "Rounding direction",
           "resync_interval_seconds": "Resync interval (seconds)",
           "min_change_threshold": "Minimum change threshold (°C)",
           "min_send_interval_seconds": "Minimum send interval (seconds)"
@@ -60,6 +62,13 @@
         "half_step": "0.5 steps (e.g. 19.0, 19.5, 20.0)",
         "1_decimal": "1 decimal (e.g. 19.0, 19.3, 19.7)",
         "2_decimals": "2 decimals (e.g. 19.00, 19.33, 19.67)"
+      }
+    },
+    "rounding_direction": {
+      "options": {
+        "floor": "Round floor / down",
+        "nearest": "Round abs / normal rounding",
+        "ceiling": "Round ceiling / up"
       }
     }
   }

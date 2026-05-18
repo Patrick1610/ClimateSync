@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,6 +21,7 @@ from .const import (
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
+    CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
@@ -27,7 +29,10 @@ from .const import (
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
+    DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    ROUNDING_DIRECTION_CEILING,
+    ROUNDING_DIRECTION_FLOOR,
     ROUNDING_MODE_2DEC,
     ROUNDING_MODE_HALF,
     STATUS_APPLY_FAILED,
@@ -39,6 +44,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_ROUNDING_EPSILON = 1e-9
 
 
 def _safe_float(value: Any) -> float | None:
@@ -54,14 +60,51 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _apply_rounding(value: float, mode: str) -> float:
-    """Apply a rounding mode to a temperature value."""
+def _apply_nearest_rounding(value: float, mode: str) -> float:
+    """Apply the historical nearest rounding mode to a temperature value."""
     if mode == ROUNDING_MODE_HALF:
         return round(value * 2) / 2
     if mode == ROUNDING_MODE_2DEC:
         return round(value, 2)
     # Default / ROUNDING_MODE_1DEC
     return round(value, 1)
+
+
+def _rounding_step(mode: str) -> tuple[float, int]:
+    """Return the quantum and display precision for a rounding mode."""
+    if mode == ROUNDING_MODE_HALF:
+        return 0.5, 1
+    if mode == ROUNDING_MODE_2DEC:
+        return 0.01, 2
+    # Default / ROUNDING_MODE_1DEC
+    return 0.1, 1
+
+
+def round_setpoint(
+    value: float,
+    rounding_mode: str,
+    rounding_direction: str = DEFAULT_ROUNDING_DIRECTION,
+) -> float:
+    """Round a setpoint using the selected mode and direction."""
+    if rounding_direction not in (
+        ROUNDING_DIRECTION_FLOOR,
+        ROUNDING_DIRECTION_CEILING,
+    ):
+        return _apply_nearest_rounding(value, rounding_mode)
+
+    step, precision = _rounding_step(rounding_mode)
+    scaled = value / step
+    if rounding_direction == ROUNDING_DIRECTION_FLOOR:
+        rounded = math.floor(scaled + _ROUNDING_EPSILON) * step
+    else:
+        rounded = math.ceil(scaled - _ROUNDING_EPSILON) * step
+
+    return round(rounded, precision)
+
+
+def _apply_rounding(value: float, mode: str) -> float:
+    """Apply the legacy nearest rounding mode to a temperature value."""
+    return round_setpoint(value, mode, DEFAULT_ROUNDING_DIRECTION)
 
 
 class ClimateSyncCoordinator:
@@ -78,6 +121,7 @@ class ClimateSyncCoordinator:
         self._idle_temperature: float = DEFAULT_IDLE_TEMPERATURE
         self._max_setpoint: float = DEFAULT_MAX_SETPOINT
         self._rounding_mode: str = DEFAULT_ROUNDING_MODE
+        self._rounding_direction: str = DEFAULT_ROUNDING_DIRECTION
         self._resync_interval: int = DEFAULT_RESYNC_INTERVAL
         self._min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD
         self._min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL
@@ -92,6 +136,8 @@ class ClimateSyncCoordinator:
         self.destination_current_target: float | None = None
 
         # Computed setpoint
+        self.raw_setpoint: float | None = None
+        self.rounded_setpoint: float | None = None
         self.computed_setpoint: float | None = None
 
         # Diagnostics
@@ -153,6 +199,10 @@ class ClimateSyncCoordinator:
         self._rounding_mode = opts.get(
             CONF_ROUNDING_MODE,
             data.get(CONF_ROUNDING_MODE, DEFAULT_ROUNDING_MODE),
+        )
+        self._rounding_direction = opts.get(
+            CONF_ROUNDING_DIRECTION,
+            data.get(CONF_ROUNDING_DIRECTION, DEFAULT_ROUNDING_DIRECTION),
         )
         self._resync_interval = int(
             opts.get(CONF_RESYNC_INTERVAL, DEFAULT_RESYNC_INTERVAL)
@@ -348,7 +398,14 @@ class ClimateSyncCoordinator:
             else:
                 setpoint_raw = dest_current + max_delta
 
-        setpoint_final = _apply_rounding(setpoint_raw, self._rounding_mode)
+        self.raw_setpoint = setpoint_raw
+        setpoint_rounded = round_setpoint(
+            setpoint_raw,
+            self._rounding_mode,
+            self._rounding_direction,
+        )
+        self.rounded_setpoint = setpoint_rounded
+        setpoint_final = setpoint_rounded
         # Clamp to the configured maximum setpoint.  This prevents a cascade
         # where the destination propagates its new setpoint to source TRVs
         # (e.g. Plugwise Adam), causing ClimateSync to compute an even higher
@@ -364,8 +421,13 @@ class ClimateSyncCoordinator:
         self.last_desired_setpoint = setpoint_final
 
         _LOGGER.debug(
-            "ClimateSync: computed setpoint=%.2f (max_delta=%.2f, leading=%s)",
+            "ClimateSync: computed setpoint=%.2f raw=%.2f rounded=%.2f "
+            "(rounding_mode=%s, rounding_direction=%s, max_delta=%.2f, leading=%s)",
             setpoint_final,
+            setpoint_raw,
+            setpoint_rounded,
+            self._rounding_mode,
+            self._rounding_direction,
             max_delta,
             leading,
         )
@@ -545,3 +607,8 @@ class ClimateSyncCoordinator:
     def rounding_mode(self) -> str:
         """Return rounding mode."""
         return self._rounding_mode
+
+    @property
+    def rounding_direction(self) -> str:
+        """Return rounding direction."""
+        return self._rounding_direction

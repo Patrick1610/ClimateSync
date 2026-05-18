@@ -44,6 +44,7 @@ from custom_components.climatesync.const import (  # noqa: E402
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
+    CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
@@ -51,7 +52,14 @@ from custom_components.climatesync.const import (  # noqa: E402
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
+    DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    ROUNDING_DIRECTION_CEILING,
+    ROUNDING_DIRECTION_FLOOR,
+    ROUNDING_DIRECTION_NEAREST,
+    ROUNDING_MODE_1DEC,
+    ROUNDING_MODE_2DEC,
+    ROUNDING_MODE_HALF,
     STATUS_APPLY_FAILED,
     STATUS_MISMATCH,
     STATUS_MISSING_SOURCE_DATA,
@@ -62,6 +70,7 @@ from custom_components.climatesync.coordinator import (  # noqa: E402
     ClimateSyncCoordinator,
     _apply_rounding,
     _safe_float,
+    round_setpoint,
 )
 
 # ---------------------------------------------------------------------------
@@ -91,6 +100,7 @@ def _build_coordinator(
     min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
     resync_interval: int = DEFAULT_RESYNC_INTERVAL,
     rounding_mode: str = DEFAULT_ROUNDING_MODE,
+    rounding_direction: str | None = None,
 ) -> tuple[ClimateSyncCoordinator, MagicMock]:
     """Build a coordinator with a fully-mocked hass/entry, return (coordinator, hass)."""
     if source_entities is None:
@@ -112,6 +122,8 @@ def _build_coordinator(
         CONF_MIN_SEND_INTERVAL: min_send_interval,
         CONF_RESYNC_INTERVAL: resync_interval,
     }
+    if rounding_direction is not None:
+        entry.options[CONF_ROUNDING_DIRECTION] = rounding_direction
 
     coord = ClimateSyncCoordinator(hass, entry)
     # Apply config without setting up real HA listeners
@@ -120,6 +132,8 @@ def _build_coordinator(
     coord._idle_temperature = float(idle_temperature)
     coord._max_setpoint = float(max_setpoint)
     coord._rounding_mode = rounding_mode
+    if rounding_direction is not None:
+        coord._rounding_direction = rounding_direction
     coord._min_change_threshold = float(min_change_threshold)
     coord._min_send_interval = int(min_send_interval)
     coord._resync_interval = int(resync_interval)
@@ -172,6 +186,148 @@ class TestApplyRounding:
 
     def test_2dec(self):
         assert _apply_rounding(21.346, "2_decimals") == 21.35
+
+
+class TestRoundSetpoint:
+    """Unit tests for round_setpoint helper."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.2, 19.0),
+            (19.3, 19.5),
+            (19.0, 19.0),
+            (19.5, 19.5),
+        ],
+    )
+    def test_half_step_nearest(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_NEAREST)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.1, 19.0),
+            (19.5, 19.5),
+            (19.9, 19.5),
+            (19.0, 19.0),
+        ],
+    )
+    def test_half_step_floor(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_FLOOR)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.1, 19.5),
+            (19.5, 19.5),
+            (19.6, 20.0),
+            (19.0, 19.0),
+        ],
+    )
+    def test_half_step_ceiling(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_CEILING)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.14, 19.1),
+            (19.16, 19.2),
+            (19.10, 19.1),
+        ],
+    )
+    def test_1_decimal_nearest(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_1DEC, ROUNDING_DIRECTION_NEAREST)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.19, 19.1),
+            (19.11, 19.1),
+            (19.10, 19.1),
+        ],
+    )
+    def test_1_decimal_floor(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_1DEC, ROUNDING_DIRECTION_FLOOR)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.11, 19.2),
+            (19.19, 19.2),
+            (19.10, 19.1),
+        ],
+    )
+    def test_1_decimal_ceiling(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_1DEC, ROUNDING_DIRECTION_CEILING)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.114, 19.11),
+            (19.116, 19.12),
+            (19.10, 19.1),
+        ],
+    )
+    def test_2_decimals_nearest(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_2DEC, ROUNDING_DIRECTION_NEAREST)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.119, 19.11),
+            (19.111, 19.11),
+            (19.10, 19.1),
+        ],
+    )
+    def test_2_decimals_floor(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_2DEC, ROUNDING_DIRECTION_FLOOR)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (19.111, 19.12),
+            (19.119, 19.12),
+            (19.10, 19.1),
+        ],
+    )
+    def test_2_decimals_ceiling(self, value: float, expected: float):
+        assert (
+            round_setpoint(value, ROUNDING_MODE_2DEC, ROUNDING_DIRECTION_CEILING)
+            == expected
+        )
+
+    def test_missing_rounding_direction_defaults_to_nearest(self):
+        coord, _ = _build_coordinator(rounding_mode=ROUNDING_MODE_HALF)
+
+        coord.async_apply_options()
+
+        assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
+        assert coord.rounding_direction == ROUNDING_DIRECTION_NEAREST
+        assert round_setpoint(19.2, coord.rounding_mode, coord.rounding_direction) == 19.0
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +620,32 @@ async def test_idle_temperature_when_no_demand():
 
     assert coord.computed_setpoint == 5.0
     assert coord.delta_max == 0.0
+
+
+@pytest.mark.asyncio
+async def test_rounding_direction_applies_to_raw_setpoint_not_delta():
+    """Rounding direction is applied after destination_current + delta_max."""
+    coord, hass = _build_coordinator(
+        min_change_threshold=0.0,
+        rounding_mode=ROUNDING_MODE_HALF,
+        rounding_direction=ROUNDING_DIRECTION_CEILING,
+    )
+
+    # delta=0.1 and destination_current=19.1 produce raw=19.2.
+    # Ceiling raw 19.2 to half steps gives 19.5. If the delta were rounded
+    # separately first, this would become 20.0, which is not desired.
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=20.1),
+        "climate.dest": _make_state(current_temperature=19.1, target_temperature=5.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.raw_setpoint == pytest.approx(19.2)
+    assert coord.rounded_setpoint == 19.5
+    assert coord.computed_setpoint == 19.5
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2]["temperature"] == 19.5
 
 
 # ---------------------------------------------------------------------------

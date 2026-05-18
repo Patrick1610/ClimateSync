@@ -62,20 +62,24 @@ Select one or more **climate entities** that represent the rooms whose heating d
 |---|---|---|
 | Destination climate entity | — | The thermostat that ClimateSync will control. |
 | Idle temperature | 5.0 °C | Target temperature sent to the destination when no room has a positive delta (all rooms are at or above their target). |
-| Rounding mode | 1 decimal | How the computed setpoint is rounded before being sent. |
+| Maximum setpoint | 35.0 °C | Hard ceiling for the destination setpoint. |
+| Rounding mode | 1 decimal | Step size used for the computed setpoint. |
+| Rounding direction | nearest | Whether the computed setpoint is rounded down, normally, or up within the selected rounding mode. |
 
 ### Options Flow — reconfigure everything via the settings gear
 
 After setup, open the integration → **Configure** (⚙ gear icon) to get the same 2-step wizard again. You can change:
 
 - **Step 1**: add or remove source rooms
-- **Step 2**: change the destination thermostat, idle temperature, rounding mode, and advanced options:
+- **Step 2**: change the destination thermostat, idle temperature, maximum setpoint, rounding mode, rounding direction, and advanced options:
 
 | Option | Default | Description |
 |---|---|---|
 | Destination thermostat | — | Change which thermostat is controlled. |
 | Idle temperature | 5.0 °C | Temperature sent when no room needs heating. |
-| Rounding mode | 1 decimal | How setpoints are rounded. |
+| Maximum setpoint | 35.0 °C | Hard ceiling for the destination setpoint. |
+| Rounding mode | 1 decimal | Step size used for setpoints. |
+| Rounding direction | nearest | `floor`, `nearest`, or `ceiling` rounding within the selected mode. |
 | Resync interval | 60 s | How often ClimateSync checks even without state changes. |
 | Minimum change threshold | 0.2 °C | Only send a new setpoint if the change exceeds this. |
 | Minimum send interval | 10 s | At most one service call per this many seconds. |
@@ -104,20 +108,45 @@ Else:
     # Plugwise Emma that modulate boiler output based on their own
     # observed delta.
 
-setpoint_final = round(setpoint_raw, rounding_mode)
+rounded_setpoint = round_setpoint(setpoint_raw, rounding_mode, rounding_direction)
+setpoint_final = min(rounded_setpoint, maximum_setpoint)
 
 If abs(destination_current_target - setpoint_final) > min_change_threshold:
     If time_since_last_call >= min_send_interval:
         climate.set_temperature(destination, setpoint_final)
 ```
 
-### Rounding modes
+### Rounding mode and direction
+
+The **rounding mode** determines the step size. The **rounding direction** determines where the raw setpoint lands within that step size.
+
+`nearest` is the default and preserves the historical ClimateSync behaviour for existing installations. If an older config entry does not contain `rounding_direction`, ClimateSync treats it as `nearest`.
 
 | Mode | Example input | Result |
 |---|---|---|
 | `0.5 steps` | 19.3 | 19.5 |
 | `1 decimal` | 19.33 | 19.3 |
 | `2 decimals` | 19.333 | 19.33 |
+
+| Direction | Behaviour |
+|---|---|
+| `floor` | Always round down within the selected mode. |
+| `nearest` | Round to the nearest step, matching the old behaviour. |
+| `ceiling` | Always round up within the selected mode. |
+
+Plugwise Emma examples:
+
+| Mode + direction | Raw setpoint | Sent setpoint |
+|---|---:|---:|
+| `0.5 steps` + `ceiling` | 19.1 | 19.5 |
+| `0.5 steps` + `ceiling` | 19.5 | 19.5 |
+| `0.5 steps` + `ceiling` | 19.6 | 20.0 |
+| `0.5 steps` + `floor` | 19.1 | 19.0 |
+| `0.5 steps` + `floor` | 19.9 | 19.5 |
+| `1 decimal` + `ceiling` | 19.11 | 19.2 |
+| `1 decimal` + `floor` | 19.19 | 19.1 |
+
+For Plugwise Emma, `0.5 steps` can be useful because Emma commonly accepts half-degree setpoints. Combining `0.5 steps` with `ceiling` can help when small RoomMind deltas would otherwise disappear through normal rounding, for example a raw setpoint of 19.1 becoming 19.5 instead of 19.0.
 
 ---
 
@@ -136,9 +165,13 @@ All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas
 | `destination_current_target` | Current target temperature at destination |
 | `delta_max` | Max delta used for this computation |
 | `rounding_mode` | Active rounding mode |
+| `rounding_direction` | Active rounding direction |
+| `raw_setpoint` | Unrounded `destination_current_temperature + delta_max`, or idle temperature when no room needs heating |
+| `rounded_setpoint` | Raw setpoint after rounding mode and rounding direction |
+| `final_setpoint` | Final setpoint after rounding and maximum-setpoint clamp |
 | `idle_temperature` | Configured idle temperature |
 
-**State**: the rounded setpoint that ClimateSync wants to apply (`destination_current_temperature + delta_max`, rounded).
+**State**: the final setpoint that ClimateSync wants to apply (`destination_current_temperature + delta_max`, rounded and capped by maximum setpoint).
 
 #### Max delta — `sensor.climatesync_2_delta_max`
 
@@ -197,6 +230,11 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `last_desired_setpoint` | What ClimateSync computed as the ideal setpoint |
 | `last_applied_setpoint` | What was last actually sent to the destination |
 | `current_destination_target` | The destination's actual `temperature` attribute right now |
+| `rounding_mode` | Active rounding mode |
+| `rounding_direction` | Active rounding direction |
+| `raw_setpoint` | Last unrounded setpoint |
+| `rounded_setpoint` | Last rounded setpoint before maximum-setpoint clamp |
+| `final_setpoint` | Last final setpoint after rounding and clamp |
 | `mismatch_seconds` | How long (seconds) the desired and actual setpoint have been diverging |
 | `mismatch_since` | ISO timestamp of when the mismatch started (null when in sync) |
 | `resync_count` | Number of periodic resyncs since startup |
@@ -213,7 +251,7 @@ Shows the destination thermostat's actual current target temperature in real tim
 
 ### Destination is not accepting the setpoint
 
-Some thermostats (e.g. Plugwise Emma) only accept specific temperature steps. Use the **0.5 steps** rounding mode in that case.
+Some thermostats (e.g. Plugwise Emma) only accept specific temperature steps. Use the **0.5 steps** rounding mode in that case. If small RoomMind deltas are rounded away, use **Rounding direction = ceiling** so a raw setpoint such as 19.1 is sent as 19.5 instead of 19.0.
 
 ### `mismatch_seconds` keeps growing
 

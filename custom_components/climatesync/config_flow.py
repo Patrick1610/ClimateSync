@@ -17,6 +17,7 @@ from .const import (
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
     CONF_RESYNC_INTERVAL,
+    CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
     DEFAULT_IDLE_TEMPERATURE,
@@ -24,8 +25,10 @@ from .const import (
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
+    DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
     DOMAIN,
+    ROUNDING_DIRECTIONS,
     ROUNDING_MODES,
 )
 
@@ -56,6 +59,7 @@ def _destination_schema(
     default_idle: float = DEFAULT_IDLE_TEMPERATURE,
     default_max_setpoint: float = DEFAULT_MAX_SETPOINT,
     default_rounding: str = DEFAULT_ROUNDING_MODE,
+    default_rounding_direction: str = DEFAULT_ROUNDING_DIRECTION,
     default_resync: int = DEFAULT_RESYNC_INTERVAL,
     default_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
     default_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
@@ -96,6 +100,20 @@ def _destination_schema(
                 "select": {
                     "options": [{"value": m, "label": m} for m in ROUNDING_MODES],
                     "translation_key": "rounding_mode",
+                }
+            }
+        ),
+        vol.Required(
+            CONF_ROUNDING_DIRECTION,
+            default=default_rounding_direction,
+        ): selector.selector(
+            {
+                "select": {
+                    "options": [
+                        {"value": direction, "label": direction}
+                        for direction in ROUNDING_DIRECTIONS
+                    ],
+                    "translation_key": "rounding_direction",
                 }
             }
         ),
@@ -199,6 +217,10 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
                         CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                         CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
+                        CONF_ROUNDING_DIRECTION: user_input.get(
+                            CONF_ROUNDING_DIRECTION,
+                            DEFAULT_ROUNDING_DIRECTION,
+                        ),
                     },
                 )
 
@@ -277,6 +299,10 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                         CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
                         CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                         CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
+                        CONF_ROUNDING_DIRECTION: user_input.get(
+                            CONF_ROUNDING_DIRECTION,
+                            DEFAULT_ROUNDING_DIRECTION,
+                        ),
                         CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
                         CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
                         CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
@@ -290,6 +316,9 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 default_idle=self._get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
                 default_max_setpoint=self._get(CONF_MAX_SETPOINT, DEFAULT_MAX_SETPOINT),
                 default_rounding=self._get(CONF_ROUNDING_MODE, DEFAULT_ROUNDING_MODE),
+                default_rounding_direction=self._get(
+                    CONF_ROUNDING_DIRECTION, DEFAULT_ROUNDING_DIRECTION
+                ),
                 default_resync=self._get(CONF_RESYNC_INTERVAL, DEFAULT_RESYNC_INTERVAL),
                 default_threshold=self._get(
                     CONF_MIN_CHANGE_THRESHOLD, DEFAULT_MIN_CHANGE_THRESHOLD
@@ -301,4 +330,3 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
             ),
             errors=errors,
         )
-
