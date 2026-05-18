@@ -82,6 +82,7 @@ from custom_components.climatesync.const import (  # noqa: E402
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
     DEFAULT_RESYNC_INTERVAL,
+    DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
 )
 from custom_components.climatesync.coordinator import (  # noqa: E402
@@ -133,6 +134,7 @@ def _build_coordinator(
     coord._destination_entity = destination_entity
     coord._idle_temperature = float(DEFAULT_IDLE_TEMPERATURE)
     coord._rounding_mode = DEFAULT_ROUNDING_MODE
+    coord._rounding_direction = DEFAULT_ROUNDING_DIRECTION
 
     return coord, hass
 
@@ -219,6 +221,49 @@ class TestSensorNaming:
 
         names = [setpoint._attr_name, max_delta._attr_name, room1._attr_name, room2._attr_name]
         assert names == sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# Tests: setpoint diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestSetpointDiagnostics:
+    """Verify rounding diagnostics are exposed as sensor attributes."""
+
+    def test_destination_setpoint_attributes_include_rounding_context(self):
+        coord, _ = _build_coordinator(destination_entity="climate.emma")
+        coord.destination_current_temperature = 19.1
+        coord.destination_current_target = 19.0
+        coord.delta_max = 0.1
+        coord.raw_setpoint = 19.2
+        coord.rounded_setpoint = 19.5
+        coord.computed_setpoint = 19.5
+
+        sensor = DestinationSetpointSensor(coord, coord.entry, _make_device_info())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["destination_entity_id"] == "climate.emma"
+        assert attrs["rounding_mode"] == DEFAULT_ROUNDING_MODE
+        assert attrs["rounding_direction"] == DEFAULT_ROUNDING_DIRECTION
+        assert attrs["raw_setpoint"] == 19.2
+        assert attrs["rounded_setpoint"] == 19.5
+        assert attrs["final_setpoint"] == 19.5
+
+    def test_status_attributes_include_rounding_context(self):
+        coord, _ = _build_coordinator()
+        coord.raw_setpoint = 19.2
+        coord.rounded_setpoint = 19.5
+        coord.computed_setpoint = 19.5
+
+        sensor = StatusSensor(coord, coord.entry, _make_device_info())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["rounding_mode"] == DEFAULT_ROUNDING_MODE
+        assert attrs["rounding_direction"] == DEFAULT_ROUNDING_DIRECTION
+        assert attrs["raw_setpoint"] == 19.2
+        assert attrs["rounded_setpoint"] == 19.5
+        assert attrs["final_setpoint"] == 19.5
 
 
 # ---------------------------------------------------------------------------

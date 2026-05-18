@@ -219,6 +219,10 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
             "destination_current_target": self._coordinator.destination_current_target,
             "delta_max": round(self._coordinator.delta_max, 2),
             "rounding_mode": self._coordinator.rounding_mode,
+            "rounding_direction": self._coordinator.rounding_direction,
+            "raw_setpoint": self._coordinator.raw_setpoint,
+            "rounded_setpoint": self._coordinator.rounded_setpoint,
+            "final_setpoint": self._coordinator.computed_setpoint,
             "idle_temperature": self._coordinator.idle_temperature,
         }
 
@@ -296,6 +300,11 @@ class StatusSensor(_ClimateSyncBaseSensor):
             "last_desired_setpoint": coord.last_desired_setpoint,
             "last_applied_setpoint": coord.last_applied_setpoint,
             "current_destination_target": coord.destination_current_target,
+            "rounding_mode": coord.rounding_mode,
+            "rounding_direction": coord.rounding_direction,
+            "raw_setpoint": coord.raw_setpoint,
+            "rounded_setpoint": coord.rounded_setpoint,
+            "final_setpoint": coord.computed_setpoint,
             "mismatch_seconds": round(coord.mismatch_seconds, 1),
             "mismatch_since": (
                 coord.mismatch_since.isoformat() if coord.mismatch_since else None
