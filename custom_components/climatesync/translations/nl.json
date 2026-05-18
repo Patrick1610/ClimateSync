@@ -67,7 +67,7 @@
     "rounding_direction": {
       "options": {
         "floor": "Afronden floor / omlaag",
-        "nearest": "Afronden abs / normaal afronden",
+        "nearest": "Afronden nearest (standaard)",
         "ceiling": "Afronden ceiling / omhoog"
       }
     }

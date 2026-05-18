@@ -259,11 +259,24 @@ class TestSetpointDiagnostics:
         sensor = StatusSensor(coord, coord.entry, _make_device_info())
         attrs = sensor.extra_state_attributes
 
+        assert attrs["destination_entity_id"] == "climate.dest"
         assert attrs["rounding_mode"] == DEFAULT_ROUNDING_MODE
         assert attrs["rounding_direction"] == DEFAULT_ROUNDING_DIRECTION
         assert attrs["raw_setpoint"] == 19.2
         assert attrs["rounded_setpoint"] == 19.5
         assert attrs["final_setpoint"] == 19.5
+
+    def test_rounding_attributes_fallback_to_final_setpoint(self):
+        coord, _ = _build_coordinator()
+        coord.raw_setpoint = 19.2
+        coord.rounded_setpoint = None
+        coord.computed_setpoint = 19.5
+
+        setpoint_sensor = DestinationSetpointSensor(coord, coord.entry, _make_device_info())
+        status_sensor = StatusSensor(coord, coord.entry, _make_device_info())
+
+        assert setpoint_sensor.extra_state_attributes["rounded_setpoint"] == 19.5
+        assert status_sensor.extra_state_attributes["rounded_setpoint"] == 19.5
 
 
 # ---------------------------------------------------------------------------

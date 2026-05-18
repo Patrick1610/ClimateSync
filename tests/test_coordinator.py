@@ -329,6 +329,25 @@ class TestRoundSetpoint:
         assert coord.rounding_direction == ROUNDING_DIRECTION_NEAREST
         assert round_setpoint(19.2, coord.rounding_mode, coord.rounding_direction) == 19.0
 
+    def test_invalid_rounding_direction_falls_back_to_nearest(self):
+        assert round_setpoint(19.3, ROUNDING_MODE_HALF, "invalid") == 19.5
+
+    def test_invalid_rounding_mode_falls_back_to_default(self):
+        assert round_setpoint(19.26, "invalid_mode", ROUNDING_DIRECTION_FLOOR) == 19.2
+
+    def test_epsilon_safe_floor_and_ceiling(self):
+        assert round_setpoint(19.5000000001, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_FLOOR) == 19.5
+        assert round_setpoint(19.4999999999, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_CEILING) == 19.5
+
+
+def test_apply_options_invalid_rounding_direction_defaults_to_nearest():
+    coord, _ = _build_coordinator(rounding_mode=ROUNDING_MODE_HALF)
+    coord.entry.options[CONF_ROUNDING_DIRECTION] = "bad_value"
+
+    coord.async_apply_options()
+
+    assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
+
 
 # ---------------------------------------------------------------------------
 # Core coordinator tests

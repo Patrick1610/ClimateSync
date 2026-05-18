@@ -124,6 +124,7 @@ If abs(destination_current_target - setpoint_final) > min_change_threshold:
 ### Rounding mode and direction
 
 The **rounding mode** determines the step size. The **rounding direction** determines where the raw setpoint lands within that step size.
+ClimateSync applies epsilon-safe floor/nearest/ceiling rounding to avoid floating-point edge cases around step boundaries.
 
 `nearest` is the default and preserves the historical ClimateSync behaviour for existing installations. If an older config entry does not contain `rounding_direction`, ClimateSync treats it as `nearest`.
 
