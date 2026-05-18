@@ -5,6 +5,11 @@
 
 > **Developed with Plugwise Emma in mind, but universally usable with any Home Assistant climate entity that exposes `current_temperature` and `temperature` attributes.**
 
+## Recovery release 1.2.2
+
+This release is intentionally built from the stable `v1.2.1` baseline and only includes the rounding improvements from PR #8 (`rounding_direction`).
+Unwanted functionality introduced in newer lines is intentionally excluded from this recovery patch.
+
 ClimateSync is a HACS-ready Home Assistant custom integration that implements **delta-based thermostat synchronisation**. It reads the heating demand (delta between target and current temperature) from multiple source climate entities (rooms) and drives a single destination thermostat by continuously adjusting its target temperature.
 
 ### Why delta-based instead of copying the highest setpoint?
