@@ -89,16 +89,16 @@ def _normalize_rounding_direction(direction: str) -> str:
 def _round_scaled(scaled: float, direction: str) -> float:
     """Round a scaled value using epsilon-safe floor/nearest/ceiling logic.
 
-    The default branch handles nearest rounding with an epsilon bump to avoid
-    boundary artifacts. Floor and nearest use +epsilon for values slightly
-    below boundaries; ceiling uses -epsilon for values slightly above
-    boundaries, so float artifacts still land on the expected step.
+    Floor uses +epsilon for values slightly below boundaries; ceiling uses
+    -epsilon for values slightly above boundaries, so float artifacts still
+    land on the expected step. Nearest intentionally uses plain Python
+    round() to preserve the legacy v1.2.1 behavior for existing configs.
     """
     if direction == ROUNDING_DIRECTION_FLOOR:
         return float(math.floor(scaled + _ROUNDING_EPSILON))
     if direction == ROUNDING_DIRECTION_CEILING:
         return float(math.ceil(scaled - _ROUNDING_EPSILON))
-    return float(round(scaled + _ROUNDING_EPSILON))
+    return float(round(scaled))
 
 
 def round_setpoint(

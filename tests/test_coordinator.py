@@ -187,6 +187,20 @@ class TestApplyRounding:
     def test_2dec(self):
         assert _apply_rounding(21.346, "2_decimals") == 21.35
 
+    @pytest.mark.parametrize(
+        ("value", "mode", "expected"),
+        [
+            (19.25, ROUNDING_MODE_HALF, 19.0),
+            (20.25, ROUNDING_MODE_HALF, 20.0),
+            (19.15, ROUNDING_MODE_1DEC, 19.1),
+            (19.25, ROUNDING_MODE_1DEC, 19.2),
+            (19.005, ROUNDING_MODE_2DEC, 19.0),
+            (19.025, ROUNDING_MODE_2DEC, 19.02),
+        ],
+    )
+    def test_legacy_nearest_tie_cases(self, value: float, mode: str, expected: float):
+        assert _apply_rounding(value, mode) == expected
+
 
 class TestRoundSetpoint:
     """Unit tests for round_setpoint helper."""
@@ -198,6 +212,8 @@ class TestRoundSetpoint:
             (19.3, 19.5),
             (19.0, 19.0),
             (19.5, 19.5),
+            (19.25, 19.0),
+            (20.25, 20.0),
         ],
     )
     def test_half_step_nearest(self, value: float, expected: float):
@@ -242,6 +258,8 @@ class TestRoundSetpoint:
             (19.14, 19.1),
             (19.16, 19.2),
             (19.10, 19.1),
+            (19.15, 19.1),
+            (19.25, 19.2),
         ],
     )
     def test_1_decimal_nearest(self, value: float, expected: float):
@@ -284,6 +302,8 @@ class TestRoundSetpoint:
             (19.114, 19.11),
             (19.116, 19.12),
             (19.10, 19.1),
+            (19.005, 19.0),
+            (19.025, 19.02),
         ],
     )
     def test_2_decimals_nearest(self, value: float, expected: float):
