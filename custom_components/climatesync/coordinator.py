@@ -33,6 +33,8 @@ from .const import (
     DEFAULT_ROUNDING_MODE,
     ROUNDING_DIRECTION_CEILING,
     ROUNDING_DIRECTION_FLOOR,
+    ROUNDING_DIRECTIONS,
+    ROUNDING_MODES,
     ROUNDING_MODE_2DEC,
     ROUNDING_MODE_HALF,
     STATUS_APPLY_FAILED,
@@ -60,16 +62,6 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _apply_nearest_rounding(value: float, mode: str) -> float:
-    """Apply the historical nearest rounding mode to a temperature value."""
-    if mode == ROUNDING_MODE_HALF:
-        return round(value * 2) / 2
-    if mode == ROUNDING_MODE_2DEC:
-        return round(value, 2)
-    # Default / ROUNDING_MODE_1DEC
-    return round(value, 1)
-
-
 def _rounding_step(mode: str) -> tuple[float, int]:
     """Return the quantum and display precision for a rounding mode."""
     if mode == ROUNDING_MODE_HALF:
@@ -80,24 +72,46 @@ def _rounding_step(mode: str) -> tuple[float, int]:
     return 0.1, 1
 
 
+def _normalize_rounding_mode(mode: str) -> str:
+    """Return a safe rounding mode."""
+    if mode in ROUNDING_MODES:
+        return mode
+    return DEFAULT_ROUNDING_MODE
+
+
+def _normalize_rounding_direction(direction: str) -> str:
+    """Return a safe rounding direction."""
+    if direction in ROUNDING_DIRECTIONS:
+        return direction
+    return DEFAULT_ROUNDING_DIRECTION
+
+
+def _round_scaled(scaled: float, direction: str) -> float:
+    """Round a scaled value using epsilon-safe floor/nearest/ceiling logic.
+
+    Floor uses +epsilon for values slightly below boundaries; ceiling uses
+    -epsilon for values slightly above boundaries, so float artifacts still
+    land on the expected step. Nearest intentionally uses plain Python
+    round() to preserve the legacy v1.2.1 behavior for existing configs.
+    """
+    if direction == ROUNDING_DIRECTION_FLOOR:
+        return float(math.floor(scaled + _ROUNDING_EPSILON))
+    if direction == ROUNDING_DIRECTION_CEILING:
+        return float(math.ceil(scaled - _ROUNDING_EPSILON))
+    return float(round(scaled))
+
+
 def round_setpoint(
     value: float,
     rounding_mode: str,
     rounding_direction: str = DEFAULT_ROUNDING_DIRECTION,
 ) -> float:
     """Round a setpoint using the selected mode and direction."""
-    if rounding_direction not in (
-        ROUNDING_DIRECTION_FLOOR,
-        ROUNDING_DIRECTION_CEILING,
-    ):
-        return _apply_nearest_rounding(value, rounding_mode)
-
-    step, precision = _rounding_step(rounding_mode)
+    mode = _normalize_rounding_mode(rounding_mode)
+    direction = _normalize_rounding_direction(rounding_direction)
+    step, precision = _rounding_step(mode)
     scaled = value / step
-    if rounding_direction == ROUNDING_DIRECTION_FLOOR:
-        rounded = math.floor(scaled + _ROUNDING_EPSILON) * step
-    else:
-        rounded = math.ceil(scaled - _ROUNDING_EPSILON) * step
+    rounded = _round_scaled(scaled, direction) * step
 
     return round(rounded, precision)
 
@@ -200,9 +214,12 @@ class ClimateSyncCoordinator:
             CONF_ROUNDING_MODE,
             data.get(CONF_ROUNDING_MODE, DEFAULT_ROUNDING_MODE),
         )
-        self._rounding_direction = opts.get(
-            CONF_ROUNDING_DIRECTION,
-            data.get(CONF_ROUNDING_DIRECTION, DEFAULT_ROUNDING_DIRECTION),
+        self._rounding_mode = _normalize_rounding_mode(self._rounding_mode)
+        self._rounding_direction = _normalize_rounding_direction(
+            opts.get(
+                CONF_ROUNDING_DIRECTION,
+                data.get(CONF_ROUNDING_DIRECTION, DEFAULT_ROUNDING_DIRECTION),
+            )
         )
         self._resync_interval = int(
             opts.get(CONF_RESYNC_INTERVAL, DEFAULT_RESYNC_INTERVAL)

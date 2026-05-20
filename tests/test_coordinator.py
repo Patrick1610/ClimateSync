@@ -187,6 +187,20 @@ class TestApplyRounding:
     def test_2dec(self):
         assert _apply_rounding(21.346, "2_decimals") == 21.35
 
+    @pytest.mark.parametrize(
+        ("value", "mode", "expected"),
+        [
+            (19.25, ROUNDING_MODE_HALF, 19.0),
+            (20.25, ROUNDING_MODE_HALF, 20.0),
+            (19.15, ROUNDING_MODE_1DEC, 19.1),
+            (19.25, ROUNDING_MODE_1DEC, 19.2),
+            (19.005, ROUNDING_MODE_2DEC, 19.0),
+            (19.025, ROUNDING_MODE_2DEC, 19.02),
+        ],
+    )
+    def test_legacy_nearest_tie_cases(self, value: float, mode: str, expected: float):
+        assert _apply_rounding(value, mode) == expected
+
 
 class TestRoundSetpoint:
     """Unit tests for round_setpoint helper."""
@@ -198,6 +212,8 @@ class TestRoundSetpoint:
             (19.3, 19.5),
             (19.0, 19.0),
             (19.5, 19.5),
+            (19.25, 19.0),
+            (20.25, 20.0),
         ],
     )
     def test_half_step_nearest(self, value: float, expected: float):
@@ -242,6 +258,8 @@ class TestRoundSetpoint:
             (19.14, 19.1),
             (19.16, 19.2),
             (19.10, 19.1),
+            (19.15, 19.1),
+            (19.25, 19.2),
         ],
     )
     def test_1_decimal_nearest(self, value: float, expected: float):
@@ -284,6 +302,8 @@ class TestRoundSetpoint:
             (19.114, 19.11),
             (19.116, 19.12),
             (19.10, 19.1),
+            (19.005, 19.0),
+            (19.025, 19.02),
         ],
     )
     def test_2_decimals_nearest(self, value: float, expected: float):
@@ -328,6 +348,25 @@ class TestRoundSetpoint:
         assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
         assert coord.rounding_direction == ROUNDING_DIRECTION_NEAREST
         assert round_setpoint(19.2, coord.rounding_mode, coord.rounding_direction) == 19.0
+
+    def test_invalid_rounding_direction_falls_back_to_nearest(self):
+        assert round_setpoint(19.3, ROUNDING_MODE_HALF, "invalid") == 19.5
+
+    def test_invalid_rounding_mode_falls_back_to_default(self):
+        assert round_setpoint(19.26, "invalid_mode", ROUNDING_DIRECTION_FLOOR) == 19.2
+
+    def test_epsilon_safe_floor_and_ceiling(self):
+        assert round_setpoint(19.5000000001, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_FLOOR) == 19.5
+        assert round_setpoint(19.4999999999, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_CEILING) == 19.5
+
+
+def test_apply_options_invalid_rounding_direction_defaults_to_nearest():
+    coord, _ = _build_coordinator(rounding_mode=ROUNDING_MODE_HALF)
+    coord.entry.options[CONF_ROUNDING_DIRECTION] = "bad_value"
+
+    coord.async_apply_options()
+
+    assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
 
 
 # ---------------------------------------------------------------------------

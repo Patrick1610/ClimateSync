@@ -213,6 +213,9 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return detailed setpoint context."""
+        rounded_setpoint = self._coordinator.rounded_setpoint
+        if rounded_setpoint is None:
+            rounded_setpoint = self._coordinator.computed_setpoint
         return {
             "destination_entity_id": self._coordinator.destination_entity,
             "destination_current_temperature": self._coordinator.destination_current_temperature,
@@ -221,7 +224,7 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
             "rounding_mode": self._coordinator.rounding_mode,
             "rounding_direction": self._coordinator.rounding_direction,
             "raw_setpoint": self._coordinator.raw_setpoint,
-            "rounded_setpoint": self._coordinator.rounded_setpoint,
+            "rounded_setpoint": rounded_setpoint,
             "final_setpoint": self._coordinator.computed_setpoint,
             "idle_temperature": self._coordinator.idle_temperature,
         }
@@ -295,6 +298,7 @@ class StatusSensor(_ClimateSyncBaseSensor):
             else None
         )
         return {
+            "destination_entity_id": coord.destination_entity,
             "last_update_time": last_update,
             "last_service_call_time": last_call,
             "last_desired_setpoint": coord.last_desired_setpoint,
@@ -303,7 +307,9 @@ class StatusSensor(_ClimateSyncBaseSensor):
             "rounding_mode": coord.rounding_mode,
             "rounding_direction": coord.rounding_direction,
             "raw_setpoint": coord.raw_setpoint,
-            "rounded_setpoint": coord.rounded_setpoint,
+            "rounded_setpoint": coord.rounded_setpoint
+            if coord.rounded_setpoint is not None
+            else coord.computed_setpoint,
             "final_setpoint": coord.computed_setpoint,
             "mismatch_seconds": round(coord.mismatch_seconds, 1),
             "mismatch_since": (

@@ -67,7 +67,7 @@
     "rounding_direction": {
       "options": {
         "floor": "Round floor / down",
-        "nearest": "Round abs / normal rounding",
+        "nearest": "Round nearest (default)",
         "ceiling": "Round ceiling / up"
       }
     }
