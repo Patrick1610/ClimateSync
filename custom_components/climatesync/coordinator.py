@@ -47,6 +47,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _ROUNDING_EPSILON = 1e-9
+_ATTR_CURRENT_TEMPERATURE = "current_temperature"
+_ATTR_TEMPERATURE = "temperature"
+_ATTR_TARGET_TEMP_LOW = "target_temp_low"
+_ATTR_TARGET_TEMP_HIGH = "target_temp_high"
 
 
 def _safe_float(value: Any) -> float | None:
@@ -148,6 +152,8 @@ class ClimateSyncCoordinator:
         # Destination tracking
         self.destination_current_temperature: float | None = None
         self.destination_current_target: float | None = None
+        self._destination_uses_temperature_range: bool = False
+        self._destination_target_temp_high: float | None = None
 
         # Computed setpoint
         self.raw_setpoint: float | None = None
@@ -236,14 +242,18 @@ class ClimateSyncCoordinator:
         self._setup_listeners()
 
     @staticmethod
-    def _has_relevant_change(event: Any) -> bool:
+    def _has_relevant_change(
+        event: Any, *, is_destination: bool = False
+    ) -> bool:
         """Return True when temperature-relevant attributes changed.
 
-        Only ``current_temperature``, ``temperature`` (target), and the main
-        entity state (e.g. heat → off, unavailable) are considered relevant.
-        Other attribute changes (hvac_action, preset_mode, …) are ignored so
-        that integrations like Versatile Thermostat, which forward many TRV
-        attribute updates, do not trigger unnecessary evaluations.
+        For source entities, only ``current_temperature``, ``temperature``
+        (target), and the main entity state (e.g. heat → off, unavailable) are
+        considered relevant. Range target attributes are additionally watched
+        for the destination. Other attribute changes (hvac_action,
+        preset_mode, …) are ignored so that integrations like Versatile
+        Thermostat, which forward many TRV attribute updates, do not trigger
+        unnecessary evaluations.
         """
         old_state = event.data.get("old_state")
         new_state = event.data.get("new_state")
@@ -256,10 +266,14 @@ class ClimateSyncCoordinator:
         if old_state.state != new_state.state:
             return True
 
-        _ATTRS = ("current_temperature", "temperature")
+        attrs_to_watch = [_ATTR_CURRENT_TEMPERATURE, _ATTR_TEMPERATURE]
+        if is_destination:
+            attrs_to_watch.extend(
+                (_ATTR_TARGET_TEMP_LOW, _ATTR_TARGET_TEMP_HIGH)
+            )
         old_attrs = old_state.attributes
         new_attrs = new_state.attributes
-        for attr in _ATTRS:
+        for attr in attrs_to_watch:
             if old_attrs.get(attr) != new_attrs.get(attr):
                 return True
 
@@ -276,13 +290,15 @@ class ClimateSyncCoordinator:
 
         @callback
         def _handle_state_change(event: Any) -> None:
-            if self._has_relevant_change(event):
+            triggered_by_destination = (
+                event.data.get("entity_id") == self._destination_entity
+            )
+            if self._has_relevant_change(
+                event, is_destination=triggered_by_destination
+            ):
                 # When the destination itself changed its reported temperature
                 # after ClimateSync already set it (e.g. firmware compensation),
                 # bypass the rate limiter so the correction is applied immediately.
-                triggered_by_destination = (
-                    event.data.get("entity_id") == self._destination_entity
-                )
                 self.hass.async_create_task(
                     self._async_evaluate(bypass_rate_limit=triggered_by_destination)
                 )
@@ -337,17 +353,33 @@ class ClimateSyncCoordinator:
             self._notify_listeners()
             return
 
+        dest_attributes = dest_state.attributes
         self.destination_current_temperature = _safe_float(
-            dest_state.attributes.get("current_temperature")
+            dest_attributes.get(_ATTR_CURRENT_TEMPERATURE)
         )
-        self.destination_current_target = _safe_float(
-            dest_state.attributes.get("temperature")
+        self._destination_uses_temperature_range = (
+            _ATTR_TEMPERATURE not in dest_attributes
+            and _ATTR_TARGET_TEMP_LOW in dest_attributes
+            and _ATTR_TARGET_TEMP_HIGH in dest_attributes
         )
+        if self._destination_uses_temperature_range:
+            self.destination_current_target = _safe_float(
+                dest_attributes.get(_ATTR_TARGET_TEMP_LOW)
+            )
+            self._destination_target_temp_high = _safe_float(
+                dest_attributes.get(_ATTR_TARGET_TEMP_HIGH)
+            )
+        else:
+            self.destination_current_target = _safe_float(
+                dest_attributes.get(_ATTR_TEMPERATURE)
+            )
+            self._destination_target_temp_high = None
 
         _LOGGER.debug(
-            "ClimateSync: destination current=%.2f target=%s",
+            "ClimateSync: destination current=%.2f target=%s range=%s",
             self.destination_current_temperature or 0.0,
             self.destination_current_target,
+            self._destination_uses_temperature_range,
         )
 
         # Compute room deltas
@@ -434,6 +466,21 @@ class ClimateSyncCoordinator:
                 self._max_setpoint,
             )
             setpoint_final = self._max_setpoint
+        # Home Assistant rejects a range service call when target_temp_low is
+        # greater than target_temp_high. Preserve the destination's upper bound
+        # and safely clamp the lower bound before applying it.
+        if (
+            self._destination_uses_temperature_range
+            and self._destination_target_temp_high is not None
+            and setpoint_final > self._destination_target_temp_high
+        ):
+            _LOGGER.warning(
+                "ClimateSync: computed target_temp_low %.2f exceeds existing "
+                "target_temp_high %.2f, clamping",
+                setpoint_final,
+                self._destination_target_temp_high,
+            )
+            setpoint_final = self._destination_target_temp_high
         self.computed_setpoint = setpoint_final
         self.last_desired_setpoint = setpoint_final
 
@@ -543,6 +590,31 @@ class ClimateSyncCoordinator:
                     )
                     return
 
+        service_data: dict[str, Any] = {
+            "entity_id": self._destination_entity,
+        }
+        if self._destination_uses_temperature_range:
+            if self._destination_target_temp_high is None:
+                self.apply_failures += 1
+                self.last_error = (
+                    "Destination range target_temp_high is not a valid temperature"
+                )
+                self.status = STATUS_APPLY_FAILED
+                _LOGGER.error(
+                    "ClimateSync: cannot set temperature range on %s: %s",
+                    self._destination_entity,
+                    self.last_error,
+                )
+                return
+            service_data.update(
+                {
+                    _ATTR_TARGET_TEMP_LOW: setpoint,
+                    _ATTR_TARGET_TEMP_HIGH: self._destination_target_temp_high,
+                }
+            )
+        else:
+            service_data[_ATTR_TEMPERATURE] = setpoint
+
         self.apply_attempts += 1
         _LOGGER.debug(
             "ClimateSync: applying setpoint %.2f to %s (attempt #%d)",
@@ -554,10 +626,7 @@ class ClimateSyncCoordinator:
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
-                {
-                    "entity_id": self._destination_entity,
-                    "temperature": setpoint,
-                },
+                service_data,
                 blocking=True,
             )
             self.last_applied_setpoint = setpoint
