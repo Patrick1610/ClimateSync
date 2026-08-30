@@ -90,6 +90,26 @@ def _make_state(current_temperature: float | None, target_temperature: float | N
     return s
 
 
+def _make_range_state(
+    current_temperature: float | None,
+    target_temp_low: float | None,
+    target_temp_high: float | None,
+    state: str = "heat",
+) -> MagicMock:
+    """Return a mock HA State for a temperature-range climate entity."""
+    attrs: dict = {}
+    if current_temperature is not None:
+        attrs["current_temperature"] = current_temperature
+    if target_temp_low is not None:
+        attrs["target_temp_low"] = target_temp_low
+    if target_temp_high is not None:
+        attrs["target_temp_high"] = target_temp_high
+    s = MagicMock()
+    s.state = state
+    s.attributes = attrs
+    return s
+
+
 def _build_coordinator(
     *,
     source_entities: list[str] | None = None,
@@ -446,6 +466,150 @@ async def test_blocking_true_in_service_call():
 
 
 @pytest.mark.asyncio
+async def test_single_target_destination_service_call_is_unchanged():
+    """Single-target destinations continue using the temperature field."""
+    coord, hass = _build_coordinator(min_change_threshold=0.2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=23.0),
+        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.destination_current_target == 18.0
+    hass.services.async_call.assert_awaited_once_with(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.dest", "temperature": 23.0},
+        blocking=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_target_destination_takes_precedence_over_range_attributes():
+    """The normal temperature attribute remains authoritative when present."""
+    coord, hass = _build_coordinator(min_change_threshold=0.2)
+    destination = _make_state(current_temperature=20.0, target_temperature=18.0)
+    destination.attributes.update(
+        {"target_temp_low": 9.5, "target_temp_high": 26.0}
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=23.0),
+        "climate.dest": destination,
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.destination_current_target == 18.0
+    assert hass.services.async_call.call_args.args[2] == {
+        "entity_id": "climate.dest",
+        "temperature": 23.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_range_destination_reads_target_temp_low_as_current_target():
+    """Range destinations expose their heating target through target_temp_low."""
+    coord, hass = _build_coordinator(
+        idle_temperature=9.5,
+        min_change_threshold=0.2,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=22.0, target_temperature=22.0),
+        "climate.dest": _make_range_state(
+            current_temperature=22.8,
+            target_temp_low=9.5,
+            target_temp_high=26.0,
+        ),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.destination_current_target == 9.5
+    hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_range_destination_service_call_preserves_target_temp_high():
+    """Range destinations receive the new low target and existing high target."""
+    coord, hass = _build_coordinator(min_change_threshold=0.2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=20.7),
+        "climate.dest": _make_range_state(
+            current_temperature=22.8,
+            target_temp_low=9.5,
+            target_temp_high=26.0,
+        ),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == 23.5
+    hass.services.async_call.assert_awaited_once_with(
+        "climate",
+        "set_temperature",
+        {
+            "entity_id": "climate.dest",
+            "target_temp_low": 23.5,
+            "target_temp_high": 26.0,
+        },
+        blocking=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_range_destination_clamps_low_target_to_existing_high_target():
+    """An invalid calculated lower bound is clamped to the preserved upper bound."""
+    coord, hass = _build_coordinator(min_change_threshold=0.2)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=24.0),
+        "climate.dest": _make_range_state(
+            current_temperature=22.8,
+            target_temp_low=9.5,
+            target_temp_high=26.0,
+        ),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.raw_setpoint == pytest.approx(26.8)
+    assert coord.computed_setpoint == 26.0
+    assert hass.services.async_call.call_args.args[2] == {
+        "entity_id": "climate.dest",
+        "target_temp_low": 26.0,
+        "target_temp_high": 26.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_range_destination_with_invalid_high_target_fails_safely():
+    """An invalid but present target_temp_high prevents the service call."""
+    coord, hass = _build_coordinator(min_change_threshold=0.2)
+    destination = _make_range_state(
+        current_temperature=22.8,
+        target_temp_low=9.5,
+        target_temp_high=None,
+    )
+    destination.attributes["target_temp_high"] = None
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=20.7),
+        "climate.dest": destination,
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.status == STATUS_APPLY_FAILED
+    assert coord.apply_failures == 1
+    hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_anti_flap_skip_counter():
     """skipped_anti_flap increments when change is within threshold."""
     coord, hass = _build_coordinator(min_change_threshold=0.5)
@@ -734,6 +898,29 @@ class TestHasRelevantChange:
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
 
+    @pytest.mark.parametrize(
+        ("attribute", "new_value"),
+        [
+            ("target_temp_low", 10.0),
+            ("target_temp_high", 27.0),
+        ],
+    )
+    def test_destination_range_target_changed(self, attribute, new_value):
+        """Evaluate destination changes to either range target attribute."""
+        old = _make_range_state(22.8, 9.5, 26.0)
+        new = _make_range_state(22.8, 9.5, 26.0)
+        new.attributes[attribute] = new_value
+        event = _make_event(old, new)
+
+        assert (
+            ClimateSyncCoordinator._has_relevant_change(
+                event, is_destination=True
+            )
+            is True
+        )
+        # Source behavior is unchanged: range targets are not source inputs.
+        assert ClimateSyncCoordinator._has_relevant_change(event) is False
+
     def test_irrelevant_attribute_change_ignored(self):
         """Skip evaluation when only non-temperature attributes change."""
         old = _make_state(current_temperature=20.0, target_temperature=22.0)
@@ -756,6 +943,36 @@ class TestHasRelevantChange:
         new = _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable")
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+
+def test_destination_range_target_change_schedules_evaluation():
+    """The registered destination listener reevaluates on range target changes."""
+    coord, hass = _build_coordinator()
+
+    with (
+        patch(
+            "custom_components.climatesync.coordinator.async_track_state_change_event",
+            return_value=MagicMock(),
+        ) as track_state_change,
+        patch(
+            "custom_components.climatesync.coordinator.async_track_time_interval",
+            return_value=MagicMock(),
+        ),
+    ):
+        coord._setup_listeners()
+
+    handler = track_state_change.call_args.args[2]
+    coord._async_evaluate = MagicMock(return_value="evaluation")
+    event = _make_event(
+        _make_range_state(22.8, 9.5, 26.0),
+        _make_range_state(22.8, 10.0, 26.0),
+    )
+    event.data["entity_id"] = "climate.dest"
+
+    handler(event)
+
+    coord._async_evaluate.assert_called_once_with(bypass_rate_limit=True)
+    hass.async_create_task.assert_called_once_with("evaluation")
 
 
 # ---------------------------------------------------------------------------

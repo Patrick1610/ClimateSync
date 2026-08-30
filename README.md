@@ -3,7 +3,7 @@
 [![HACS Custom][hacs-shield]][hacs-url]
 [![License: MIT][license-shield]][license-url]
 
-> **Developed with Plugwise Emma in mind, but universally usable with any Home Assistant climate entity that exposes `current_temperature` and `temperature` attributes.**
+> **Developed with Plugwise Emma in mind, but universally usable with compatible Home Assistant climate entities. Source entities must expose `current_temperature` and `temperature`. Destinations may use a normal `temperature` target or a heating-oriented range where ClimateSync controls `target_temp_low` and preserves `target_temp_high`.**
 
 ## Recovery release 1.2.2
 
@@ -29,6 +29,7 @@ Even without an Emma, this delta-based method is more accurate than copying setp
 ## Features
 
 - Event-driven updates — reacts immediately to temperature changes.
+- Supports normal single-target destinations and heating-oriented range destinations by controlling `target_temp_low` while preserving `target_temp_high`.
 - Periodic resync (configurable, default 60 s) to recover from missed events.
 - Anti-flap: only sends `climate.set_temperature` when the change exceeds a configurable threshold (default 0.2 °C).
 - Rate limiting: maximum one service call per 10 seconds (configurable).
@@ -65,7 +66,7 @@ Select one or more **climate entities** that represent the rooms whose heating d
 
 | Field | Default | Description |
 |---|---|---|
-| Destination climate entity | — | The thermostat that ClimateSync will control. |
+| Destination climate entity | — | The thermostat that ClimateSync will control. Normal destinations use `temperature`; heating-oriented range destinations use `target_temp_low`, while ClimateSync preserves the existing `target_temp_high`. |
 | Idle temperature | 5.0 °C | Target temperature sent to the destination when no room has a positive delta (all rooms are at or above their target). |
 | Maximum setpoint | 35.0 °C | Hard ceiling for the destination setpoint. |
 | Rounding mode | 1 decimal | Step size used for the computed setpoint. |
@@ -116,9 +117,21 @@ Else:
 rounded_setpoint = round_setpoint(setpoint_raw, rounding_mode, rounding_direction)
 setpoint_final = min(rounded_setpoint, maximum_setpoint)
 
+For a single-target destination:
+    destination_current_target = temperature
+    climate.set_temperature(temperature=setpoint_final)
+
+For a heating-oriented range destination without a temperature attribute:
+    destination_current_target = target_temp_low
+    setpoint_final = min(setpoint_final, target_temp_high)
+    climate.set_temperature(
+        target_temp_low=setpoint_final,
+        target_temp_high=existing_target_temp_high,
+    )
+
 If abs(destination_current_target - setpoint_final) > min_change_threshold:
     If time_since_last_call >= min_send_interval:
-        climate.set_temperature(destination, setpoint_final)
+        apply the destination payload shown above
 ```
 
 ### Rounding mode and direction
@@ -174,10 +187,10 @@ All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas
 | `rounding_direction` | Active rounding direction |
 | `raw_setpoint` | Unrounded `destination_current_temperature + delta_max`, or idle temperature when no room needs heating |
 | `rounded_setpoint` | Raw setpoint after rounding mode and rounding direction |
-| `final_setpoint` | Final setpoint after rounding and maximum-setpoint clamp |
+| `final_setpoint` | Final setpoint after rounding, maximum-setpoint clamp, and any heating-range upper-bound clamp |
 | `idle_temperature` | Configured idle temperature |
 
-**State**: the final setpoint that ClimateSync wants to apply (`destination_current_temperature + delta_max`, rounded and capped by maximum setpoint).
+**State**: the final setpoint that ClimateSync wants to apply (`destination_current_temperature + delta_max`, rounded and capped by the configured maximum and, for heating-oriented range destinations, the preserved upper target).
 
 #### Max delta — `sensor.climatesync_2_delta_max`
 
@@ -210,7 +223,9 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `destination_entity_id` | The controlled thermostat |
 | `destination_current_temperature` | Current measured temperature at destination |
 
-**State**: the destination's current `temperature` attribute (its active target).
+**State**: the destination's current `temperature` attribute, or `target_temp_low` for a heating-oriented range destination (its active heating target).
+
+For a heating-oriented range destination, ClimateSync controls only `target_temp_low` and preserves the existing `target_temp_high`; it does not independently manage a cooling target. If the calculated lower target would exceed the preserved upper target, the final setpoint is clamped to `target_temp_high` before the service call. This avoids sending an invalid range to Home Assistant.
 
 ### Diagnostic
 
@@ -235,12 +250,12 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `last_service_call_time` | ISO timestamp of the last `climate.set_temperature` call |
 | `last_desired_setpoint` | What ClimateSync computed as the ideal setpoint |
 | `last_applied_setpoint` | What was last actually sent to the destination |
-| `current_destination_target` | The destination's actual `temperature` attribute right now |
+| `current_destination_target` | The destination's actual `temperature` attribute, or controlled `target_temp_low` for a heating-oriented range destination |
 | `rounding_mode` | Active rounding mode |
 | `rounding_direction` | Active rounding direction |
 | `raw_setpoint` | Last unrounded setpoint |
 | `rounded_setpoint` | Last rounded setpoint before maximum-setpoint clamp |
-| `final_setpoint` | Last final setpoint after rounding and clamp |
+| `final_setpoint` | Last final setpoint after rounding, configured maximum clamp, and any heating-range upper-bound clamp |
 | `mismatch_seconds` | How long (seconds) the desired and actual setpoint have been diverging |
 | `mismatch_since` | ISO timestamp of when the mismatch started (null when in sync) |
 | `resync_count` | Number of periodic resyncs since startup |
@@ -277,13 +292,13 @@ The destination thermostat is offline. No service calls are made. ClimateSync wi
 
 ### `apply_failed`
 
-Check `last_error` in the `sensor.climatesync_status` attributes. Most likely the climate entity does not support the `climate.set_temperature` service or the entity id is wrong.
+Check `last_error` in the `sensor.climatesync_status` attributes. Most likely the climate entity does not support the `climate.set_temperature` service, its range attributes are invalid, or the entity id is wrong.
 
 ---
 
 ## Compatibility
 
-ClimateSync uses only the standard `climate.set_temperature` service and reads standard climate entity attributes (`current_temperature`, `temperature`). It works with any climate integration that follows the standard HA climate platform contract, including but not limited to:
+ClimateSync uses only the standard `climate.set_temperature` service. Source entities require `current_temperature` and `temperature`. Normal destination entities require `current_temperature` and `temperature`. Heating-oriented range destinations instead require `current_temperature`, `target_temp_low`, and `target_temp_high`; ClimateSync controls the lower heating target and preserves the upper target rather than managing both sides of the range. It works with climate integrations that follow the standard HA climate platform contract, including but not limited to:
 
 - Plugwise Emma / Smile
 - Generic Thermostat
