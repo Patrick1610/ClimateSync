@@ -10,9 +10,10 @@
       },
       "destination": {
         "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Select the thermostat that ClimateSync will control. The **idle temperature** is used when no room needs heating. The **maximum setpoint** caps how high ClimateSync will ever set the destination (prevents runaway spikes). The **rounding mode** determines the step size; the **rounding direction** determines floor, nearest, or ceiling.",
+        "description": "Select the thermostat that ClimateSync will control. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating range climate. For a lower target, ClimateSync preserves the current upper target in the same action.",
         "data": {
           "destination_entity": "Destination thermostat",
+          "destination_target": "Destination target to control",
           "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
           "max_setpoint": "Maximum setpoint (°C) – hard ceiling for the destination setpoint",
           "rounding_mode": "Rounding mode for the setpoint",
@@ -23,7 +24,8 @@
     "error": {
       "no_sources": "Please select at least one source climate entity.",
       "no_destination": "Please select a destination thermostat.",
-      "dest_is_source": "The destination thermostat cannot also be a source room."
+      "dest_is_source": "The destination thermostat cannot also be a source room.",
+      "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target."
     }
   },
   "options": {
@@ -37,9 +39,10 @@
       },
       "destination": {
         "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Change the destination thermostat and adjust all settings. **Demand activation threshold**: room delta required to start heating. **Demand deactivation threshold**: lower delta at which heating stops. The lower threshold must be below the activation threshold. **Min change threshold** only prevents small destination-setpoint updates after demand has been evaluated.",
+        "description": "Change the destination thermostat and adjust all settings. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating range climate. For a lower target, ClimateSync preserves the current upper target in the same action. **Demand activation threshold**: room delta required to start heating. **Demand deactivation threshold**: lower delta at which heating stops.",
         "data": {
           "destination_entity": "Destination thermostat",
+          "destination_target": "Destination target to control",
           "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
           "max_setpoint": "Maximum setpoint (°C) – hard ceiling for the destination setpoint",
           "rounding_mode": "Rounding mode for the setpoint",
@@ -56,7 +59,8 @@
       "no_sources": "Please select at least one source climate entity.",
       "no_destination": "Please select a destination thermostat.",
       "dest_is_source": "The destination thermostat cannot also be a source room.",
-      "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold."
+      "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold.",
+      "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target."
     }
   },
   "selector": {
@@ -72,6 +76,12 @@
         "floor": "Round floor / down",
         "nearest": "Round nearest (default)",
         "ceiling": "Round ceiling / up"
+      }
+    },
+    "destination_target": {
+      "options": {
+        "temperature": "Target temperature (default)",
+        "target_temp_low": "Lower target temperature (heating range)"
       }
     }
   }
