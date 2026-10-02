@@ -5,6 +5,13 @@
 
 > **Developed with Plugwise Emma in mind. Source climates expose `current_temperature` and `temperature`; destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.2.5
+
+This release retains the clearer source-health diagnostics from 1.2.4 while
+restoring the active idle fallback when no usable source remains. That fail-safe
+withdraws a potentially stale heating request instead of leaving the last
+destination target untouched.
+
 ## Release 1.2.4
 
 This release makes partial source failures explicit and safe. A source climate
@@ -124,7 +131,7 @@ For each source climate entity (room):
         source is active; delta = max(target - current, 0)
 
 If no usable source remains:
-    do not write a destination target
+    apply idle_temperature to withdraw prior heating demand
 
 delta_max = max(all room deltas)
 
@@ -275,7 +282,7 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `rate_limited` | A setpoint update was suppressed because the last call was too recent. |
 | `destination_unavailable` | The destination climate entity is unavailable or unknown. |
 | `degraded_source_data` | One or more sources are unavailable or incomplete, but at least one usable source remains. Valid rooms continue to control the destination. |
-| `missing_source_data` | No usable source remains. ClimateSync suppresses destination writes until a source recovers. |
+| `missing_source_data` | No usable source remains. ClimateSync applies the configured idle fallback until a source recovers. |
 | `apply_failed` | The `climate.set_temperature` service call threw an exception. Check `last_error`. |
 | `mismatch` | The destination's actual target deviates from the desired setpoint beyond the threshold. ClimateSync will attempt to correct this on the next cycle. |
 
@@ -325,10 +332,10 @@ The source rooms are changing temperature very rapidly. Increase `min_send_inter
 
 ### `missing_source_data`
 
-No selected source currently provides usable data, so ClimateSync intentionally
-does not write an idle or demand target. Restore at least one source with a
-valid `current_temperature` and `temperature`, or an `off` source with a valid
-`current_temperature`.
+No selected source currently provides usable data. ClimateSync actively applies
+the configured idle temperature so an earlier heating request cannot remain in
+effect. Restore at least one source with a valid `current_temperature` and
+`temperature`, or an `off` source with a valid `current_temperature`.
 
 ### `degraded_source_data`
 

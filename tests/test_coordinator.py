@@ -639,8 +639,8 @@ async def test_off_source_with_valid_temperature_is_usable_zero_demand():
 
 
 @pytest.mark.asyncio
-async def test_no_usable_sources_suppresses_destination_write():
-    """A complete source-data outage must not produce an idle command."""
+async def test_no_usable_sources_applies_idle_fallback():
+    """A complete source-data outage actively withdraws prior heat demand."""
     coord, hass = _build_coordinator(
         source_entities=["climate.room1", "climate.room2"]
     )
@@ -655,9 +655,17 @@ async def test_no_usable_sources_suppresses_destination_write():
     assert coord.status == STATUS_MISSING_SOURCE_DATA
     assert coord.usable_source_count == 0
     assert coord.degraded_source_entities == ["climate.room1", "climate.room2"]
-    assert coord.computed_setpoint is None
-    assert coord.last_desired_setpoint is None
-    hass.services.async_call.assert_not_called()
+    assert coord.computed_setpoint == DEFAULT_IDLE_TEMPERATURE
+    assert coord.last_desired_setpoint == DEFAULT_IDLE_TEMPERATURE
+    hass.services.async_call.assert_awaited_once_with(
+        "climate",
+        "set_temperature",
+        {
+            "entity_id": "climate.dest",
+            "temperature": DEFAULT_IDLE_TEMPERATURE,
+        },
+        blocking=True,
+    )
 
 
 # ---------------------------------------------------------------------------

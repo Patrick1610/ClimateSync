@@ -491,24 +491,6 @@ class ClimateSyncCoordinator:
         self.delta_max = max_delta
         self.leading_room = leading
 
-        # Without any usable source, writing the idle target would turn a data
-        # outage into an actuator command. Keep the destination untouched until
-        # at least one source is usable again.
-        if self.usable_source_count == 0:
-            self.demand_active = False
-            self.raw_setpoint = None
-            self.rounded_setpoint = None
-            self.computed_setpoint = None
-            self.last_desired_setpoint = None
-            self.mismatch_since = None
-            self.mismatch_seconds = 0.0
-            self.status = STATUS_MISSING_SOURCE_DATA
-            _LOGGER.debug(
-                "ClimateSync: no usable source data; destination write suppressed"
-            )
-            self._notify_listeners()
-            return
-
         # Apply demand hysteresis before setpoint calculation. A small positive
         # source delta is often measurement or rounding noise and must not turn
         # the central heat source on. Once demand is active, keep it active
@@ -610,7 +592,9 @@ class ClimateSyncCoordinator:
         # Determine final status: preserve apply-specific status, then layer on
         # evaluation-level statuses in priority order.
         if self.status not in (STATUS_APPLY_FAILED, STATUS_RATE_LIMITED):
-            if self.degraded_source_entities:
+            if self.usable_source_count == 0:
+                self.status = STATUS_MISSING_SOURCE_DATA
+            elif self.degraded_source_entities:
                 self.status = STATUS_DEGRADED_SOURCE_DATA
             elif self.mismatch_seconds > 0:
                 self.status = STATUS_MISMATCH
