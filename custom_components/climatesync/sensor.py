@@ -148,6 +148,7 @@ class RoomDeltaSensor(_ClimateSyncBaseSensor):
             "current_temperature": room.get("current"),
             "target_temperature": room.get("target"),
             "raw_delta": room.get("raw_delta"),
+            "source_status": room.get("source_status"),
         }
 
 
@@ -187,6 +188,13 @@ class MaxDeltaSensor(_ClimateSyncBaseSensor):
             "demand_active": self._coordinator.demand_active,
             "demand_activation_threshold": self._coordinator.demand_activation_threshold,
             "demand_deactivation_threshold": self._coordinator.demand_deactivation_threshold,
+            "usable_source_count": self._coordinator.usable_source_count,
+            "degraded_source_entities": list(
+                self._coordinator.degraded_source_entities
+            ),
+            "inactive_source_entities": list(
+                self._coordinator.inactive_source_entities
+            ),
         }
 
 
@@ -334,4 +342,8 @@ class StatusSensor(_ClimateSyncBaseSensor):
             "skipped_anti_flap": coord.skipped_anti_flap,
             "skipped_rate_limit": coord.skipped_rate_limit,
             "last_error": coord.last_error,
+            "source_count": len(coord.source_entities),
+            "usable_source_count": coord.usable_source_count,
+            "degraded_source_entities": list(coord.degraded_source_entities),
+            "inactive_source_entities": list(coord.inactive_source_entities),
         }

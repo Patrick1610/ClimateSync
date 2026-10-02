@@ -270,6 +270,9 @@ class TestSetpointDiagnostics:
         coord, _ = _build_coordinator()
         coord.delta_max = 0.3
         coord.demand_active = True
+        coord.usable_source_count = 1
+        coord.degraded_source_entities = ["climate.room2"]
+        coord.inactive_source_entities = ["climate.room1"]
 
         sensor = MaxDeltaSensor(coord, coord.entry, _make_device_info())
         attrs = sensor.extra_state_attributes
@@ -283,12 +286,18 @@ class TestSetpointDiagnostics:
             attrs["demand_deactivation_threshold"]
             == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
         )
+        assert attrs["usable_source_count"] == 1
+        assert attrs["degraded_source_entities"] == ["climate.room2"]
+        assert attrs["inactive_source_entities"] == ["climate.room1"]
 
     def test_status_attributes_include_rounding_context(self):
         coord, _ = _build_coordinator()
         coord.raw_setpoint = 19.2
         coord.rounded_setpoint = 19.5
         coord.computed_setpoint = 19.5
+        coord.usable_source_count = 1
+        coord.degraded_source_entities = ["climate.room2"]
+        coord.inactive_source_entities = ["climate.room1"]
 
         sensor = StatusSensor(coord, coord.entry, _make_device_info())
         attrs = sensor.extra_state_attributes
@@ -309,6 +318,26 @@ class TestSetpointDiagnostics:
             attrs["demand_deactivation_threshold"]
             == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
         )
+        assert attrs["source_count"] == 1
+        assert attrs["usable_source_count"] == 1
+        assert attrs["degraded_source_entities"] == ["climate.room2"]
+        assert attrs["inactive_source_entities"] == ["climate.room1"]
+
+    def test_room_delta_attributes_include_source_status(self):
+        """Room diagnostics expose active, inactive, or degraded classification."""
+        coord, _ = _build_coordinator()
+        coord.room_deltas["climate.room1"] = {
+            "delta": 0.0,
+            "current": 20.0,
+            "target": None,
+            "raw_delta": 0.0,
+            "source_status": "inactive_off",
+        }
+        sensor = RoomDeltaSensor(
+            coord, coord.entry, "climate.room1", _make_device_info()
+        )
+
+        assert sensor.extra_state_attributes["source_status"] == "inactive_off"
 
     def test_rounding_attributes_fallback_to_final_setpoint(self):
         coord, _ = _build_coordinator()

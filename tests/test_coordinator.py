@@ -68,6 +68,7 @@ from custom_components.climatesync.const import (  # noqa: E402
     ROUNDING_MODE_2DEC,
     ROUNDING_MODE_HALF,
     STATUS_APPLY_FAILED,
+    STATUS_DEGRADED_SOURCE_DATA,
     STATUS_MISMATCH,
     STATUS_MISSING_SOURCE_DATA,
     STATUS_OK,
@@ -594,8 +595,8 @@ async def test_apply_failure_sets_status():
 
 
 @pytest.mark.asyncio
-async def test_missing_source_takes_priority_over_mismatch():
-    """STATUS_MISSING_SOURCE_DATA is reported when a source is unavailable, even if there's a mismatch."""
+async def test_degraded_source_takes_priority_over_mismatch():
+    """Partial source loss is degraded while valid demand is still applied."""
     coord, hass = _build_coordinator(
         source_entities=["climate.room1", "climate.room2"],
         min_change_threshold=0.2,
@@ -611,8 +612,52 @@ async def test_missing_source_takes_priority_over_mismatch():
 
     await coord._async_evaluate()
 
-    # MISSING_SOURCE_DATA should take priority over MISMATCH
+    assert coord.status == STATUS_DEGRADED_SOURCE_DATA
+    assert coord.usable_source_count == 1
+    assert coord.degraded_source_entities == ["climate.room2"]
+    assert hass.services.async_call.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_off_source_with_valid_temperature_is_usable_zero_demand():
+    """An off source with a valid measurement is inactive, not degraded."""
+    coord, hass = _build_coordinator()
+    _configure_states(hass, {
+        "climate.room1": _make_state(20.0, None, state="off"),
+        "climate.dest": _make_state(20.0, DEFAULT_IDLE_TEMPERATURE),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.status == STATUS_OK
+    assert coord.usable_source_count == 1
+    assert coord.degraded_source_entities == []
+    assert coord.inactive_source_entities == ["climate.room1"]
+    assert coord.room_deltas["climate.room1"]["source_status"] == "inactive_off"
+    assert coord.delta_max == 0.0
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_usable_sources_suppresses_destination_write():
+    """A complete source-data outage must not produce an idle command."""
+    coord, hass = _build_coordinator(
+        source_entities=["climate.room1", "climate.room2"]
+    )
+    _configure_states(hass, {
+        "climate.room1": _make_state(None, None, state="unavailable"),
+        "climate.room2": _make_state(20.0, None, state="heat"),
+        "climate.dest": _make_state(20.0, 18.0),
+    })
+
+    await coord._async_evaluate()
+
     assert coord.status == STATUS_MISSING_SOURCE_DATA
+    assert coord.usable_source_count == 0
+    assert coord.degraded_source_entities == ["climate.room1", "climate.room2"]
+    assert coord.computed_setpoint is None
+    assert coord.last_desired_setpoint is None
+    hass.services.async_call.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

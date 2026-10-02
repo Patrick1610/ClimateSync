@@ -47,6 +47,7 @@ from .const import (
     ROUNDING_MODE_2DEC,
     ROUNDING_MODE_HALF,
     STATUS_APPLY_FAILED,
+    STATUS_DEGRADED_SOURCE_DATA,
     STATUS_DESTINATION_UNAVAILABLE,
     STATUS_MISMATCH,
     STATUS_MISSING_SOURCE_DATA,
@@ -162,6 +163,9 @@ class ClimateSyncCoordinator:
         self.delta_max: float = 0.0
         self.leading_room: str | None = None
         self.demand_active: bool = False
+        self.usable_source_count: int = 0
+        self.degraded_source_entities: list[str] = []
+        self.inactive_source_entities: list[str] = []
 
         # Destination tracking
         self.destination_current_temperature: float | None = None
@@ -373,8 +377,6 @@ class ClimateSyncCoordinator:
         """Compute deltas, setpoint, and apply if needed."""
         self.last_update_time = dt_util.utcnow()
         self.evaluation_count += 1
-        has_missing = False
-
         _LOGGER.debug("ClimateSync: evaluation #%d started", self.evaluation_count)
 
         # Read destination state
@@ -420,6 +422,10 @@ class ClimateSyncCoordinator:
         )
 
         # Compute room deltas
+        self.room_deltas = {}
+        self.usable_source_count = 0
+        self.degraded_source_entities = []
+        self.inactive_source_entities = []
         max_delta = 0.0
         leading = None
         for entity_id in self._source_entities:
@@ -431,8 +437,9 @@ class ClimateSyncCoordinator:
                     "target": None,
                     "raw_delta": 0.0,
                     "source_entity_id": entity_id,
+                    "source_status": "unavailable",
                 }
-                has_missing = True
+                self.degraded_source_entities.append(entity_id)
                 _LOGGER.debug(
                     "ClimateSync: source %s unavailable", entity_id
                 )
@@ -441,13 +448,22 @@ class ClimateSyncCoordinator:
             current = _safe_float(state.attributes.get("current_temperature"))
             target = _safe_float(state.attributes.get("temperature"))
 
-            if current is None or target is None:
-                has_missing = True
+            if state.state == "off" and current is not None:
+                self.usable_source_count += 1
+                self.inactive_source_entities.append(entity_id)
                 raw_delta = 0.0
                 effective_raw_delta = 0.0
+                source_status = "inactive_off"
+            elif current is None or target is None:
+                self.degraded_source_entities.append(entity_id)
+                raw_delta = 0.0
+                effective_raw_delta = 0.0
+                source_status = "missing_temperature"
             else:
+                self.usable_source_count += 1
                 raw_delta = target - current
                 effective_raw_delta = raw_delta
+                source_status = "active"
 
             delta = max(effective_raw_delta, 0.0)
 
@@ -457,6 +473,7 @@ class ClimateSyncCoordinator:
                 "target": target,
                 "raw_delta": raw_delta,
                 "source_entity_id": entity_id,
+                "source_status": source_status,
             }
 
             if delta > max_delta:
@@ -473,6 +490,24 @@ class ClimateSyncCoordinator:
 
         self.delta_max = max_delta
         self.leading_room = leading
+
+        # Without any usable source, writing the idle target would turn a data
+        # outage into an actuator command. Keep the destination untouched until
+        # at least one source is usable again.
+        if self.usable_source_count == 0:
+            self.demand_active = False
+            self.raw_setpoint = None
+            self.rounded_setpoint = None
+            self.computed_setpoint = None
+            self.last_desired_setpoint = None
+            self.mismatch_since = None
+            self.mismatch_seconds = 0.0
+            self.status = STATUS_MISSING_SOURCE_DATA
+            _LOGGER.debug(
+                "ClimateSync: no usable source data; destination write suppressed"
+            )
+            self._notify_listeners()
+            return
 
         # Apply demand hysteresis before setpoint calculation. A small positive
         # source delta is often measurement or rounding noise and must not turn
@@ -575,8 +610,8 @@ class ClimateSyncCoordinator:
         # Determine final status: preserve apply-specific status, then layer on
         # evaluation-level statuses in priority order.
         if self.status not in (STATUS_APPLY_FAILED, STATUS_RATE_LIMITED):
-            if has_missing:
-                self.status = STATUS_MISSING_SOURCE_DATA
+            if self.degraded_source_entities:
+                self.status = STATUS_DEGRADED_SOURCE_DATA
             elif self.mismatch_seconds > 0:
                 self.status = STATUS_MISMATCH
 

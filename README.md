@@ -5,6 +5,15 @@
 
 > **Developed with Plugwise Emma in mind. Source climates expose `current_temperature` and `temperature`; destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.2.4
+
+This release makes partial source failures explicit and safe. A source climate
+that is `off` but still exposes a valid current temperature is treated as a
+usable inactive room with zero heating demand. Unavailable or incomplete
+sources are reported as `degraded_source_data`, while healthy rooms continue to
+drive the destination. ClimateSync suppresses destination writes only when no
+usable source remains.
+
 ## Release 1.2.3
 
 This release adds configurable heating-demand hysteresis. Small positive room
@@ -107,8 +116,15 @@ After setup, open the integration → **Configure** (⚙ gear icon) to get the s
 For each source climate entity (room):
     current = current_temperature attribute
     target  = temperature attribute
-    delta   = max(target - current, 0)
-              (if either attribute is missing/unavailable → delta = 0)
+    if state == off and current is valid:
+        source is usable but inactive; delta = 0
+    elif current or target is missing/unavailable:
+        source is degraded; delta = 0
+    else:
+        source is active; delta = max(target - current, 0)
+
+If no usable source remains:
+    do not write a destination target
 
 delta_max = max(all room deltas)
 
@@ -216,6 +232,9 @@ All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas
 |---|---|
 | `room_deltas` | Map of `{entity_id: delta}` for all rooms |
 | `leading_room` | Entity id of the room with the highest delta |
+| `usable_source_count` | Number of sources that can safely participate |
+| `degraded_source_entities` | Unavailable or incomplete sources ignored for demand |
+| `inactive_source_entities` | `off` sources with a valid measurement and zero demand |
 
 **State**: the maximum delta across all rooms.
 
@@ -229,6 +248,7 @@ One sensor per source climate entity.
 | `current_temperature` | Last known current temperature |
 | `target_temperature` | Last known target temperature |
 | `raw_delta` | `target - current` (may be negative) |
+| `source_status` | `active`, `inactive_off`, `unavailable`, or `missing_temperature` |
 
 **State**: `max(raw_delta, 0)` — the effective heating demand for this room.
 
@@ -254,7 +274,8 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `ok` | Everything is in sync, no issues. |
 | `rate_limited` | A setpoint update was suppressed because the last call was too recent. |
 | `destination_unavailable` | The destination climate entity is unavailable or unknown. |
-| `missing_source_data` | One or more source entities have missing/unavailable temperature attributes. The integration continues with delta = 0 for those rooms. |
+| `degraded_source_data` | One or more sources are unavailable or incomplete, but at least one usable source remains. Valid rooms continue to control the destination. |
+| `missing_source_data` | No usable source remains. ClimateSync suppresses destination writes until a source recovers. |
 | `apply_failed` | The `climate.set_temperature` service call threw an exception. Check `last_error`. |
 | `mismatch` | The destination's actual target deviates from the desired setpoint beyond the threshold. ClimateSync will attempt to correct this on the next cycle. |
 
@@ -281,6 +302,10 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `skipped_anti_flap` | Times a setpoint update was skipped because the change was within the threshold |
 | `skipped_rate_limit` | Times a setpoint update was skipped due to rate limiting |
 | `last_error` | Last exception message, if any |
+| `source_count` | Number of configured source climates |
+| `usable_source_count` | Number of sources currently safe to use |
+| `degraded_source_entities` | Sources currently ignored because data is unavailable or incomplete |
+| `inactive_source_entities` | `off` sources that remain valid measurements with zero demand |
 
 ---
 
@@ -300,7 +325,16 @@ The source rooms are changing temperature very rapidly. Increase `min_send_inter
 
 ### `missing_source_data`
 
-One or more source climate entities are offline or do not expose `current_temperature` / `temperature` attributes. ClimateSync treats those rooms as delta = 0 and continues.
+No selected source currently provides usable data, so ClimateSync intentionally
+does not write an idle or demand target. Restore at least one source with a
+valid `current_temperature` and `temperature`, or an `off` source with a valid
+`current_temperature`.
+
+### `degraded_source_data`
+
+At least one source is unavailable or lacks a required temperature attribute.
+Other usable rooms continue to be processed. Inspect `degraded_source_entities`
+and each delta sensor's `source_status` attribute.
 
 ### `destination_unavailable`
 
