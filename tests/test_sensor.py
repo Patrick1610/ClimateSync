@@ -78,6 +78,8 @@ from custom_components.climatesync.const import (  # noqa: E402
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
@@ -249,6 +251,33 @@ class TestSetpointDiagnostics:
         assert attrs["raw_setpoint"] == 19.2
         assert attrs["rounded_setpoint"] == 19.5
         assert attrs["final_setpoint"] == 19.5
+        assert attrs["demand_active"] is False
+        assert (
+            attrs["demand_activation_threshold"]
+            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        assert (
+            attrs["demand_deactivation_threshold"]
+            == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
+
+    def test_max_delta_attributes_include_demand_context(self):
+        coord, _ = _build_coordinator()
+        coord.delta_max = 0.3
+        coord.demand_active = True
+
+        sensor = MaxDeltaSensor(coord, coord.entry, _make_device_info())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["demand_active"] is True
+        assert (
+            attrs["demand_activation_threshold"]
+            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        assert (
+            attrs["demand_deactivation_threshold"]
+            == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
 
     def test_status_attributes_include_rounding_context(self):
         coord, _ = _build_coordinator()
@@ -265,6 +294,15 @@ class TestSetpointDiagnostics:
         assert attrs["raw_setpoint"] == 19.2
         assert attrs["rounded_setpoint"] == 19.5
         assert attrs["final_setpoint"] == 19.5
+        assert attrs["demand_active"] is False
+        assert (
+            attrs["demand_activation_threshold"]
+            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        assert (
+            attrs["demand_deactivation_threshold"]
+            == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
 
     def test_rounding_attributes_fallback_to_final_setpoint(self):
         coord, _ = _build_coordinator()

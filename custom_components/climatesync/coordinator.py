@@ -15,6 +15,8 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_DEMAND_ACTIVATION_THRESHOLD,
+    CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
     CONF_MAX_SETPOINT,
@@ -24,6 +26,8 @@ from .const import (
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -47,6 +51,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _ROUNDING_EPSILON = 1e-9
+_DEMAND_EPSILON = 1e-6
 
 
 def _safe_float(value: Any) -> float | None:
@@ -139,11 +144,18 @@ class ClimateSyncCoordinator:
         self._resync_interval: int = DEFAULT_RESYNC_INTERVAL
         self._min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD
         self._min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL
+        self._demand_activation_threshold: float = (
+            DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        self._demand_deactivation_threshold: float = (
+            DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
 
         # Per-room deltas  {entity_id: {"delta": float, "current": float|None, "target": float|None}}
         self.room_deltas: dict[str, dict[str, Any]] = {}
         self.delta_max: float = 0.0
         self.leading_room: str | None = None
+        self.demand_active: bool = False
 
         # Destination tracking
         self.destination_current_temperature: float | None = None
@@ -229,6 +241,24 @@ class ClimateSyncCoordinator:
         )
         self._min_send_interval = int(
             opts.get(CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL)
+        )
+        self._demand_activation_threshold = float(
+            opts.get(
+                CONF_DEMAND_ACTIVATION_THRESHOLD,
+                data.get(
+                    CONF_DEMAND_ACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+                ),
+            )
+        )
+        self._demand_deactivation_threshold = float(
+            opts.get(
+                CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                data.get(
+                    CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+                ),
+            )
         )
 
         # Re-register listeners with updated intervals if already set up
@@ -405,8 +435,24 @@ class ClimateSyncCoordinator:
         self.delta_max = max_delta
         self.leading_room = leading
 
+        # Apply demand hysteresis before setpoint calculation. A small positive
+        # source delta is often measurement or rounding noise and must not turn
+        # the central heat source on. Once demand is active, keep it active
+        # until the lower deactivation threshold is reached.
+        if self.demand_active:
+            if (
+                max_delta
+                <= self._demand_deactivation_threshold + _DEMAND_EPSILON
+            ):
+                self.demand_active = False
+        elif (
+            max_delta + _DEMAND_EPSILON
+            >= self._demand_activation_threshold
+        ):
+            self.demand_active = True
+
         # Compute setpoint
-        if max_delta <= 0:
+        if not self.demand_active:
             setpoint_raw = self._idle_temperature
         else:
             dest_current = self.destination_current_temperature
@@ -629,3 +675,13 @@ class ClimateSyncCoordinator:
     def rounding_direction(self) -> str:
         """Return rounding direction."""
         return self._rounding_direction
+
+    @property
+    def demand_activation_threshold(self) -> float:
+        """Return the delta required to activate heating demand."""
+        return self._demand_activation_threshold
+
+    @property
+    def demand_deactivation_threshold(self) -> float:
+        """Return the delta at or below which heating demand stops."""
+        return self._demand_deactivation_threshold

@@ -37,7 +37,7 @@
       },
       "destination": {
         "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Change the destination thermostat and adjust all settings. **Maximum setpoint**: hard ceiling to prevent runaway spikes. **Rounding mode**: step size. **Rounding direction**: floor, nearest, or ceiling. **Resync interval**: how often ClimateSync checks even without changes. **Min change threshold**: smallest setpoint change worth sending. **Min send interval**: minimum seconds between two service calls (rate limiter).",
+        "description": "Change the destination thermostat and adjust all settings. **Demand activation threshold**: room delta required to start heating. **Demand deactivation threshold**: lower delta at which heating stops. The lower threshold must be below the activation threshold. **Min change threshold** only prevents small destination-setpoint updates after demand has been evaluated.",
         "data": {
           "destination_entity": "Destination thermostat",
           "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
@@ -46,14 +46,17 @@
           "rounding_direction": "Rounding direction",
           "resync_interval_seconds": "Resync interval (seconds)",
           "min_change_threshold": "Minimum change threshold (°C)",
-          "min_send_interval_seconds": "Minimum send interval (seconds)"
+          "min_send_interval_seconds": "Minimum send interval (seconds)",
+          "demand_activation_threshold": "Heating-demand activation threshold (°C)",
+          "demand_deactivation_threshold": "Heating-demand deactivation threshold (°C)"
         }
       }
     },
     "error": {
       "no_sources": "Please select at least one source climate entity.",
       "no_destination": "Please select a destination thermostat.",
-      "dest_is_source": "The destination thermostat cannot also be a source room."
+      "dest_is_source": "The destination thermostat cannot also be a source room.",
+      "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold."
     }
   },
   "selector": {

@@ -38,6 +38,8 @@ for mod_name, mod_obj in _modules.items():
 
 # Now safe to import our code
 from custom_components.climatesync.const import (  # noqa: E402
+    CONF_DEMAND_ACTIVATION_THRESHOLD,
+    CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
     CONF_MAX_SETPOINT,
@@ -47,6 +49,8 @@ from custom_components.climatesync.const import (  # noqa: E402
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -101,6 +105,8 @@ def _build_coordinator(
     resync_interval: int = DEFAULT_RESYNC_INTERVAL,
     rounding_mode: str = DEFAULT_ROUNDING_MODE,
     rounding_direction: str | None = None,
+    demand_activation_threshold: float = DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    demand_deactivation_threshold: float = DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
 ) -> tuple[ClimateSyncCoordinator, MagicMock]:
     """Build a coordinator with a fully-mocked hass/entry, return (coordinator, hass)."""
     if source_entities is None:
@@ -121,6 +127,8 @@ def _build_coordinator(
         CONF_MIN_CHANGE_THRESHOLD: min_change_threshold,
         CONF_MIN_SEND_INTERVAL: min_send_interval,
         CONF_RESYNC_INTERVAL: resync_interval,
+        CONF_DEMAND_ACTIVATION_THRESHOLD: demand_activation_threshold,
+        CONF_DEMAND_DEACTIVATION_THRESHOLD: demand_deactivation_threshold,
     }
     if rounding_direction is not None:
         entry.options[CONF_ROUNDING_DIRECTION] = rounding_direction
@@ -137,6 +145,8 @@ def _build_coordinator(
     coord._min_change_threshold = float(min_change_threshold)
     coord._min_send_interval = int(min_send_interval)
     coord._resync_interval = int(resync_interval)
+    coord._demand_activation_threshold = float(demand_activation_threshold)
+    coord._demand_deactivation_threshold = float(demand_deactivation_threshold)
 
     return coord, hass
 
@@ -367,6 +377,18 @@ def test_apply_options_invalid_rounding_direction_defaults_to_nearest():
     coord.async_apply_options()
 
     assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
+
+
+def test_apply_options_reads_demand_hysteresis_thresholds():
+    """Configured activation and deactivation thresholds are applied."""
+    coord, _ = _build_coordinator()
+    coord.entry.options[CONF_DEMAND_ACTIVATION_THRESHOLD] = 0.5
+    coord.entry.options[CONF_DEMAND_DEACTIVATION_THRESHOLD] = 0.2
+
+    coord.async_apply_options()
+
+    assert coord.demand_activation_threshold == 0.5
+    assert coord.demand_deactivation_threshold == 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -662,12 +684,111 @@ async def test_idle_temperature_when_no_demand():
 
 
 @pytest.mark.asyncio
+async def test_small_positive_delta_does_not_activate_demand():
+    """A 0.1 °C room delta must not start central heating by default."""
+    coord, hass = _build_coordinator(
+        idle_temperature=17.5,
+        rounding_mode=ROUNDING_MODE_HALF,
+        rounding_direction=ROUNDING_DIRECTION_CEILING,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.9, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.1)
+    assert coord.demand_active is False
+    assert coord.computed_setpoint == 17.5
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_demand_activates_at_activation_threshold():
+    """Demand starts once the room delta reaches the configured threshold."""
+    coord, hass = _build_coordinator(
+        idle_temperature=17.5,
+        min_change_threshold=0.0,
+        rounding_mode=ROUNDING_MODE_HALF,
+        rounding_direction=ROUNDING_DIRECTION_CEILING,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.7, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.3)
+    assert coord.demand_active is True
+    assert coord.raw_setpoint == pytest.approx(22.3)
+    assert coord.computed_setpoint == 22.5
+
+
+@pytest.mark.asyncio
+async def test_demand_hysteresis_holds_then_deactivates():
+    """Active demand persists through the hysteresis band and stops at 0.1 °C."""
+    coord, hass = _build_coordinator(
+        idle_temperature=17.5,
+        min_change_threshold=0.0,
+        rounding_mode=ROUNDING_MODE_1DEC,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.7, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+    await coord._async_evaluate()
+    assert coord.demand_active is True
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.8, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=22.3),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == pytest.approx(0.2)
+    assert coord.demand_active is True
+    assert coord.computed_setpoint == 22.2
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.9, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=22.2),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == pytest.approx(0.1)
+    assert coord.demand_active is False
+    assert coord.computed_setpoint == 17.5
+
+
+@pytest.mark.asyncio
+async def test_hysteresis_band_does_not_activate_after_restart():
+    """A fresh coordinator stays idle when the initial delta is inside the band."""
+    coord, hass = _build_coordinator(idle_temperature=17.5)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.8, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.2)
+    assert coord.demand_active is False
+    assert coord.computed_setpoint == 17.5
+
+
+@pytest.mark.asyncio
 async def test_rounding_direction_applies_to_raw_setpoint_not_delta():
     """Rounding direction is applied after destination_current + delta_max."""
     coord, hass = _build_coordinator(
         min_change_threshold=0.0,
         rounding_mode=ROUNDING_MODE_HALF,
         rounding_direction=ROUNDING_DIRECTION_CEILING,
+        demand_activation_threshold=0.0,
+        demand_deactivation_threshold=0.0,
     )
 
     # delta=0.1 and destination_current=19.1 produce raw=19.2.

@@ -37,7 +37,7 @@
       },
       "destination": {
         "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Maximaal setpoint**: harde bovengrens om ongewenste pieken te voorkomen. **Afrondingsmodus**: stapgrootte. **Afrondingsrichting**: floor, nearest of ceiling. **Hersynchronisatie-interval**: hoe vaak ClimateSync controleert ook zonder wijzigingen. **Minimale wijzigingsdrempel**: kleinste setpointwijziging die de moeite waard is om te verzenden. **Minimaal verzendinterval**: minimale seconden tussen twee serviceaanroepen (snelheidsbegrenzer).",
+        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. **Inschakeldrempel warmtevraag**: kamerdelta die nodig is om de verwarming te starten. **Uitschakeldrempel warmtevraag**: lagere delta waarbij de verwarming stopt. De uitschakeldrempel moet lager zijn dan de inschakeldrempel. **Minimale wijzigingsdrempel** voorkomt alleen kleine wijzigingen van het bestemmingssetpoint nadat de warmtevraag is bepaald.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
@@ -46,14 +46,17 @@
           "rounding_direction": "Afrondingsrichting",
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
           "min_change_threshold": "Minimale wijzigingsdrempel (°C)",
-          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
+          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)",
+          "demand_activation_threshold": "Inschakeldrempel warmtevraag (°C)",
+          "demand_deactivation_threshold": "Uitschakeldrempel warmtevraag (°C)"
         }
       }
     },
     "error": {
       "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",
-      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn."
+      "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
+      "demand_threshold_order": "De uitschakeldrempel moet lager zijn dan de inschakeldrempel."
     }
   },
   "selector": {

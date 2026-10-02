@@ -11,6 +11,8 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_DEMAND_ACTIVATION_THRESHOLD,
+    CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
     CONF_IDLE_TEMPERATURE,
     CONF_MAX_SETPOINT,
@@ -20,6 +22,8 @@ from .const import (
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -63,6 +67,8 @@ def _destination_schema(
     default_resync: int = DEFAULT_RESYNC_INTERVAL,
     default_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
     default_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
+    default_demand_activation: float = DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    default_demand_deactivation: float = DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
     include_advanced: bool = False,
 ) -> vol.Schema:
     fields: dict = {
@@ -145,6 +151,38 @@ def _destination_schema(
                     }
                 }
             )
+        )
+        fields[
+            vol.Required(
+                CONF_DEMAND_ACTIVATION_THRESHOLD,
+                default=default_demand_activation,
+            )
+        ] = selector.selector(
+            {
+                "number": {
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.1,
+                    "mode": "box",
+                    "unit_of_measurement": "°C",
+                }
+            }
+        )
+        fields[
+            vol.Required(
+                CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                default=default_demand_deactivation,
+            )
+        ] = selector.selector(
+            {
+                "number": {
+                    "min": 0.0,
+                    "max": 4.9,
+                    "step": 0.1,
+                    "mode": "box",
+                    "unit_of_measurement": "°C",
+                }
+            }
         )
         fields[vol.Required(CONF_MIN_SEND_INTERVAL, default=default_send_interval)] = (
             selector.selector(
@@ -296,6 +334,13 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif (
+                user_input[CONF_DEMAND_DEACTIVATION_THRESHOLD]
+                >= user_input[CONF_DEMAND_ACTIVATION_THRESHOLD]
+            ):
+                errors[CONF_DEMAND_DEACTIVATION_THRESHOLD] = (
+                    "demand_threshold_order"
+                )
             else:
                 return self.async_create_entry(
                     title="",
@@ -311,6 +356,12 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                         CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
                         CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
                         CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
+                        CONF_DEMAND_ACTIVATION_THRESHOLD: user_input[
+                            CONF_DEMAND_ACTIVATION_THRESHOLD
+                        ],
+                        CONF_DEMAND_DEACTIVATION_THRESHOLD: user_input[
+                            CONF_DEMAND_DEACTIVATION_THRESHOLD
+                        ],
                     },
                 )
 
@@ -330,6 +381,14 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 ),
                 default_send_interval=self._get(
                     CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL
+                ),
+                default_demand_activation=self._get(
+                    CONF_DEMAND_ACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+                ),
+                default_demand_deactivation=self._get(
+                    CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
                 ),
                 include_advanced=True,
             ),

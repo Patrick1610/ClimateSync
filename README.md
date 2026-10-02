@@ -5,10 +5,12 @@
 
 > **Developed with Plugwise Emma in mind, but universally usable with any Home Assistant climate entity that exposes `current_temperature` and `temperature` attributes.**
 
-## Recovery release 1.2.2
+## Release 1.2.3
 
-This release is intentionally built from the stable `v1.2.1` baseline and only includes the rounding improvements from PR #8 (`rounding_direction`).
-Unwanted functionality introduced in newer lines is intentionally excluded from this recovery patch.
+This release adds configurable heating-demand hysteresis. Small positive room
+deltas no longer start the destination thermostat immediately; by default,
+demand starts at 0.3 °C and stops at 0.1 °C. The existing destination-setpoint
+anti-flap and rounding behaviour remain unchanged.
 
 ClimateSync is a HACS-ready Home Assistant custom integration that implements **delta-based thermostat synchronisation**. It reads the heating demand (delta between target and current temperature) from multiple source climate entities (rooms) and drives a single destination thermostat by continuously adjusting its target temperature.
 
@@ -31,6 +33,7 @@ Even without an Emma, this delta-based method is more accurate than copying setp
 - Event-driven updates — reacts immediately to temperature changes.
 - Periodic resync (configurable, default 60 s) to recover from missed events.
 - Anti-flap: only sends `climate.set_temperature` when the change exceeds a configurable threshold (default 0.2 °C).
+- Configurable demand hysteresis: start heating at 0.3 °C room delta and stop at 0.1 °C by default.
 - Rate limiting: maximum one service call per 10 seconds (configurable).
 - Rich diagnostic sensors including a `sensor.climatesync_status` that makes desyncs visible.
 - **No controllable entities** — all control is internal via `climate.set_temperature`.
@@ -87,6 +90,8 @@ After setup, open the integration → **Configure** (⚙ gear icon) to get the s
 | Rounding direction | nearest | `floor`, `nearest`, or `ceiling` rounding within the selected mode. |
 | Resync interval | 60 s | How often ClimateSync checks even without state changes. |
 | Minimum change threshold | 0.2 °C | Only send a new setpoint if the change exceeds this. |
+| Heating-demand activation threshold | 0.3 °C | Minimum room delta required to activate the destination thermostat. |
+| Heating-demand deactivation threshold | 0.1 °C | Delta at or below which active heating demand stops. Must be lower than the activation threshold. |
 | Minimum send interval | 10 s | At most one service call per this many seconds. |
 
 ---
@@ -102,7 +107,12 @@ For each source climate entity (room):
 
 delta_max = max(all room deltas)
 
-If delta_max <= 0:
+If demand is inactive and delta_max >= demand_activation_threshold:
+    demand becomes active
+If demand is active and delta_max <= demand_deactivation_threshold:
+    demand becomes inactive
+
+If demand is inactive:
     setpoint_raw = idle_temperature        # No room needs heating
 Else:
     setpoint_raw = destination_current_temperature + delta_max
@@ -170,6 +180,9 @@ All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas
 | `destination_current_temperature` | Current measured temperature at destination |
 | `destination_current_target` | Current target temperature at destination |
 | `delta_max` | Max delta used for this computation |
+| `demand_active` | Whether the hysteresis currently considers heating demand active |
+| `demand_activation_threshold` | Configured room delta required to start demand |
+| `demand_deactivation_threshold` | Configured room delta at or below which demand stops |
 | `rounding_mode` | Active rounding mode |
 | `rounding_direction` | Active rounding direction |
 | `raw_setpoint` | Unrounded `destination_current_temperature + delta_max`, or idle temperature when no room needs heating |
