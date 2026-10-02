@@ -184,6 +184,9 @@ class MaxDeltaSensor(_ClimateSyncBaseSensor):
         return {
             "room_deltas": deltas,
             "leading_room": self._coordinator.leading_room,
+            "demand_active": self._coordinator.demand_active,
+            "demand_activation_threshold": self._coordinator.demand_activation_threshold,
+            "demand_deactivation_threshold": self._coordinator.demand_deactivation_threshold,
         }
 
 
@@ -218,9 +221,13 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
             rounded_setpoint = self._coordinator.computed_setpoint
         return {
             "destination_entity_id": self._coordinator.destination_entity,
+            "destination_target": self._coordinator.destination_target,
             "destination_current_temperature": self._coordinator.destination_current_temperature,
             "destination_current_target": self._coordinator.destination_current_target,
             "delta_max": round(self._coordinator.delta_max, 2),
+            "demand_active": self._coordinator.demand_active,
+            "demand_activation_threshold": self._coordinator.demand_activation_threshold,
+            "demand_deactivation_threshold": self._coordinator.demand_deactivation_threshold,
             "rounding_mode": self._coordinator.rounding_mode,
             "rounding_direction": self._coordinator.rounding_direction,
             "raw_setpoint": self._coordinator.raw_setpoint,
@@ -260,6 +267,7 @@ class DestinationCurrentTargetSensor(_ClimateSyncBaseSensor):
         """Return destination context."""
         return {
             "destination_entity_id": self._coordinator.destination_entity,
+            "destination_target": self._coordinator.destination_target,
             "destination_current_temperature": self._coordinator.destination_current_temperature,
         }
 
@@ -299,11 +307,15 @@ class StatusSensor(_ClimateSyncBaseSensor):
         )
         return {
             "destination_entity_id": coord.destination_entity,
+            "destination_target": coord.destination_target,
             "last_update_time": last_update,
             "last_service_call_time": last_call,
             "last_desired_setpoint": coord.last_desired_setpoint,
             "last_applied_setpoint": coord.last_applied_setpoint,
             "current_destination_target": coord.destination_current_target,
+            "demand_active": coord.demand_active,
+            "demand_activation_threshold": coord.demand_activation_threshold,
+            "demand_deactivation_threshold": coord.demand_deactivation_threshold,
             "rounding_mode": coord.rounding_mode,
             "rounding_direction": coord.rounding_direction,
             "raw_setpoint": coord.raw_setpoint,

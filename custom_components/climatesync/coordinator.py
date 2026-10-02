@@ -15,7 +15,10 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_DEMAND_ACTIVATION_THRESHOLD,
+    CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
+    CONF_DESTINATION_TARGET,
     CONF_IDLE_TEMPERATURE,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
@@ -24,6 +27,9 @@ from .const import (
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+    DEFAULT_DESTINATION_TARGET,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -31,6 +37,9 @@ from .const import (
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    DESTINATION_TARGET_HIGH,
+    DESTINATION_TARGET_LOW,
+    DESTINATION_TARGETS,
     ROUNDING_DIRECTION_CEILING,
     ROUNDING_DIRECTION_FLOOR,
     ROUNDING_DIRECTIONS,
@@ -47,6 +56,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _ROUNDING_EPSILON = 1e-9
+_DEMAND_EPSILON = 1e-6
 
 
 def _safe_float(value: Any) -> float | None:
@@ -132,6 +142,7 @@ class ClimateSyncCoordinator:
         # Resolved config / options
         self._source_entities: list[str] = []
         self._destination_entity: str = ""
+        self._destination_target: str = DEFAULT_DESTINATION_TARGET
         self._idle_temperature: float = DEFAULT_IDLE_TEMPERATURE
         self._max_setpoint: float = DEFAULT_MAX_SETPOINT
         self._rounding_mode: str = DEFAULT_ROUNDING_MODE
@@ -139,15 +150,23 @@ class ClimateSyncCoordinator:
         self._resync_interval: int = DEFAULT_RESYNC_INTERVAL
         self._min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD
         self._min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL
+        self._demand_activation_threshold: float = (
+            DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        self._demand_deactivation_threshold: float = (
+            DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
 
         # Per-room deltas  {entity_id: {"delta": float, "current": float|None, "target": float|None}}
         self.room_deltas: dict[str, dict[str, Any]] = {}
         self.delta_max: float = 0.0
         self.leading_room: str | None = None
+        self.demand_active: bool = False
 
         # Destination tracking
         self.destination_current_temperature: float | None = None
         self.destination_current_target: float | None = None
+        self.destination_paired_target: float | None = None
 
         # Computed setpoint
         self.raw_setpoint: float | None = None
@@ -196,6 +215,15 @@ class ClimateSyncCoordinator:
         self._destination_entity = opts.get(
             CONF_DESTINATION_ENTITY, data.get(CONF_DESTINATION_ENTITY, "")
         )
+        destination_target = opts.get(
+            CONF_DESTINATION_TARGET,
+            data.get(CONF_DESTINATION_TARGET, DEFAULT_DESTINATION_TARGET),
+        )
+        self._destination_target = (
+            destination_target
+            if destination_target in DESTINATION_TARGETS
+            else DEFAULT_DESTINATION_TARGET
+        )
 
         # Options override data for shared keys
         self._idle_temperature = float(
@@ -230,6 +258,24 @@ class ClimateSyncCoordinator:
         self._min_send_interval = int(
             opts.get(CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL)
         )
+        self._demand_activation_threshold = float(
+            opts.get(
+                CONF_DEMAND_ACTIVATION_THRESHOLD,
+                data.get(
+                    CONF_DEMAND_ACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+                ),
+            )
+        )
+        self._demand_deactivation_threshold = float(
+            opts.get(
+                CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                data.get(
+                    CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+                ),
+            )
+        )
 
         # Re-register listeners with updated intervals if already set up
         self._teardown_listeners()
@@ -239,8 +285,8 @@ class ClimateSyncCoordinator:
     def _has_relevant_change(event: Any) -> bool:
         """Return True when temperature-relevant attributes changed.
 
-        Only ``current_temperature``, ``temperature`` (target), and the main
-        entity state (e.g. heat → off, unavailable) are considered relevant.
+        Only ``current_temperature``, target-temperature attributes, and the
+        main entity state (e.g. heat → off, unavailable) are considered relevant.
         Other attribute changes (hvac_action, preset_mode, …) are ignored so
         that integrations like Versatile Thermostat, which forward many TRV
         attribute updates, do not trigger unnecessary evaluations.
@@ -256,7 +302,12 @@ class ClimateSyncCoordinator:
         if old_state.state != new_state.state:
             return True
 
-        _ATTRS = ("current_temperature", "temperature")
+        _ATTRS = (
+            "current_temperature",
+            "temperature",
+            "target_temp_low",
+            DESTINATION_TARGET_HIGH,
+        )
         old_attrs = old_state.attributes
         new_attrs = new_state.attributes
         for attr in _ATTRS:
@@ -341,8 +392,26 @@ class ClimateSyncCoordinator:
             dest_state.attributes.get("current_temperature")
         )
         self.destination_current_target = _safe_float(
-            dest_state.attributes.get("temperature")
+            dest_state.attributes.get(self._destination_target)
         )
+        self.destination_paired_target = (
+            _safe_float(dest_state.attributes.get(DESTINATION_TARGET_HIGH))
+            if self._destination_target == DESTINATION_TARGET_LOW
+            else None
+        )
+
+        if self.destination_current_target is None or (
+            self._destination_target == DESTINATION_TARGET_LOW
+            and self.destination_paired_target is None
+        ):
+            self.status = STATUS_DESTINATION_UNAVAILABLE
+            self.last_error = (
+                f"Destination {self._destination_entity} does not expose "
+                f"a valid {self._destination_target} target"
+            )
+            _LOGGER.warning("ClimateSync: %s", self.last_error)
+            self._notify_listeners()
+            return
 
         _LOGGER.debug(
             "ClimateSync: destination current=%.2f target=%s",
@@ -405,8 +474,24 @@ class ClimateSyncCoordinator:
         self.delta_max = max_delta
         self.leading_room = leading
 
+        # Apply demand hysteresis before setpoint calculation. A small positive
+        # source delta is often measurement or rounding noise and must not turn
+        # the central heat source on. Once demand is active, keep it active
+        # until the lower deactivation threshold is reached.
+        if self.demand_active:
+            if (
+                max_delta
+                <= self._demand_deactivation_threshold + _DEMAND_EPSILON
+            ):
+                self.demand_active = False
+        elif (
+            max_delta + _DEMAND_EPSILON
+            >= self._demand_activation_threshold
+        ):
+            self.demand_active = True
+
         # Compute setpoint
-        if max_delta <= 0:
+        if not self.demand_active:
             setpoint_raw = self._idle_temperature
         else:
             dest_current = self.destination_current_temperature
@@ -434,6 +519,18 @@ class ClimateSyncCoordinator:
                 self._max_setpoint,
             )
             setpoint_final = self._max_setpoint
+        if (
+            self._destination_target == DESTINATION_TARGET_LOW
+            and self.destination_paired_target is not None
+            and setpoint_final > self.destination_paired_target
+        ):
+            _LOGGER.warning(
+                "ClimateSync: computed lower target %.2f exceeds preserved upper "
+                "target %.2f, clamping",
+                setpoint_final,
+                self.destination_paired_target,
+            )
+            setpoint_final = self.destination_paired_target
         self.computed_setpoint = setpoint_final
         self.last_desired_setpoint = setpoint_final
 
@@ -551,13 +648,32 @@ class ClimateSyncCoordinator:
             self.apply_attempts,
         )
         try:
+            service_data: dict[str, Any] = {
+                "entity_id": self._destination_entity,
+                self._destination_target: setpoint,
+            }
+            if self._destination_target == DESTINATION_TARGET_LOW:
+                latest_state = self.hass.states.get(self._destination_entity)
+                latest_high = (
+                    _safe_float(latest_state.attributes.get(DESTINATION_TARGET_HIGH))
+                    if latest_state is not None
+                    else None
+                )
+                if latest_high is None:
+                    raise ValueError(
+                        "Destination no longer exposes a valid target_temp_high"
+                    )
+                if setpoint > latest_high:
+                    setpoint = latest_high
+                    service_data[DESTINATION_TARGET_LOW] = setpoint
+                    self.computed_setpoint = setpoint
+                    self.last_desired_setpoint = setpoint
+                service_data[DESTINATION_TARGET_HIGH] = latest_high
+
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
-                {
-                    "entity_id": self._destination_entity,
-                    "temperature": setpoint,
-                },
+                service_data,
                 blocking=True,
             )
             self.last_applied_setpoint = setpoint
@@ -629,3 +745,18 @@ class ClimateSyncCoordinator:
     def rounding_direction(self) -> str:
         """Return rounding direction."""
         return self._rounding_direction
+
+    @property
+    def destination_target(self) -> str:
+        """Return the configured destination target attribute."""
+        return self._destination_target
+
+    @property
+    def demand_activation_threshold(self) -> float:
+        """Return the delta required to activate heating demand."""
+        return self._demand_activation_threshold
+
+    @property
+    def demand_deactivation_threshold(self) -> float:
+        """Return the delta at or below which heating demand stops."""
+        return self._demand_deactivation_threshold

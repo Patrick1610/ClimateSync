@@ -38,7 +38,10 @@ for mod_name, mod_obj in _modules.items():
 
 # Now safe to import our code
 from custom_components.climatesync.const import (  # noqa: E402
+    CONF_DEMAND_ACTIVATION_THRESHOLD,
+    CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
+    CONF_DESTINATION_TARGET,
     CONF_IDLE_TEMPERATURE,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
@@ -47,6 +50,9 @@ from custom_components.climatesync.const import (  # noqa: E402
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+    DEFAULT_DESTINATION_TARGET,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -54,6 +60,7 @@ from custom_components.climatesync.const import (  # noqa: E402
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    DESTINATION_TARGET_LOW,
     ROUNDING_DIRECTION_CEILING,
     ROUNDING_DIRECTION_FLOOR,
     ROUNDING_DIRECTION_NEAREST,
@@ -77,13 +84,24 @@ from custom_components.climatesync.coordinator import (  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_state(current_temperature: float | None, target_temperature: float | None, state: str = "heat") -> MagicMock:
+def _make_state(
+    current_temperature: float | None,
+    target_temperature: float | None,
+    state: str = "heat",
+    *,
+    target_temp_low: float | None = None,
+    target_temp_high: float | None = None,
+) -> MagicMock:
     """Return a mock HA State object."""
     attrs: dict = {}
     if current_temperature is not None:
         attrs["current_temperature"] = current_temperature
     if target_temperature is not None:
         attrs["temperature"] = target_temperature
+    if target_temp_low is not None:
+        attrs["target_temp_low"] = target_temp_low
+    if target_temp_high is not None:
+        attrs["target_temp_high"] = target_temp_high
     s = MagicMock()
     s.state = state
     s.attributes = attrs
@@ -101,6 +119,9 @@ def _build_coordinator(
     resync_interval: int = DEFAULT_RESYNC_INTERVAL,
     rounding_mode: str = DEFAULT_ROUNDING_MODE,
     rounding_direction: str | None = None,
+    demand_activation_threshold: float = DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    demand_deactivation_threshold: float = DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+    destination_target: str = DEFAULT_DESTINATION_TARGET,
 ) -> tuple[ClimateSyncCoordinator, MagicMock]:
     """Build a coordinator with a fully-mocked hass/entry, return (coordinator, hass)."""
     if source_entities is None:
@@ -113,6 +134,7 @@ def _build_coordinator(
     entry.data = {
         CONF_SOURCE_ENTITIES: source_entities,
         CONF_DESTINATION_ENTITY: destination_entity,
+        CONF_DESTINATION_TARGET: destination_target,
         CONF_IDLE_TEMPERATURE: idle_temperature,
     }
     entry.options = {
@@ -121,6 +143,8 @@ def _build_coordinator(
         CONF_MIN_CHANGE_THRESHOLD: min_change_threshold,
         CONF_MIN_SEND_INTERVAL: min_send_interval,
         CONF_RESYNC_INTERVAL: resync_interval,
+        CONF_DEMAND_ACTIVATION_THRESHOLD: demand_activation_threshold,
+        CONF_DEMAND_DEACTIVATION_THRESHOLD: demand_deactivation_threshold,
     }
     if rounding_direction is not None:
         entry.options[CONF_ROUNDING_DIRECTION] = rounding_direction
@@ -129,6 +153,7 @@ def _build_coordinator(
     # Apply config without setting up real HA listeners
     coord._source_entities = list(source_entities)
     coord._destination_entity = destination_entity
+    coord._destination_target = destination_target
     coord._idle_temperature = float(idle_temperature)
     coord._max_setpoint = float(max_setpoint)
     coord._rounding_mode = rounding_mode
@@ -137,6 +162,8 @@ def _build_coordinator(
     coord._min_change_threshold = float(min_change_threshold)
     coord._min_send_interval = int(min_send_interval)
     coord._resync_interval = int(resync_interval)
+    coord._demand_activation_threshold = float(demand_activation_threshold)
+    coord._demand_deactivation_threshold = float(demand_deactivation_threshold)
 
     return coord, hass
 
@@ -367,6 +394,39 @@ def test_apply_options_invalid_rounding_direction_defaults_to_nearest():
     coord.async_apply_options()
 
     assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
+
+
+def test_apply_options_reads_demand_hysteresis_thresholds():
+    """Configured activation and deactivation thresholds are applied."""
+    coord, _ = _build_coordinator()
+    coord.entry.options[CONF_DEMAND_ACTIVATION_THRESHOLD] = 0.5
+    coord.entry.options[CONF_DEMAND_DEACTIVATION_THRESHOLD] = 0.2
+
+    coord.async_apply_options()
+
+    assert coord.demand_activation_threshold == 0.5
+    assert coord.demand_deactivation_threshold == 0.2
+
+
+def test_apply_options_reads_destination_target():
+    """The selected destination target attribute is applied from options."""
+    coord, _ = _build_coordinator()
+    coord.entry.options[CONF_DESTINATION_TARGET] = DESTINATION_TARGET_LOW
+
+    coord.async_apply_options()
+
+    assert coord.destination_target == DESTINATION_TARGET_LOW
+
+
+def test_legacy_config_defaults_to_single_temperature_target():
+    """Existing entries without a target selection retain historical behaviour."""
+    coord, _ = _build_coordinator()
+    coord.entry.data.pop(CONF_DESTINATION_TARGET)
+    coord.entry.options.pop(CONF_DESTINATION_TARGET, None)
+
+    coord.async_apply_options()
+
+    assert coord.destination_target == DEFAULT_DESTINATION_TARGET
 
 
 # ---------------------------------------------------------------------------
@@ -662,12 +722,234 @@ async def test_idle_temperature_when_no_demand():
 
 
 @pytest.mark.asyncio
+async def test_small_positive_delta_does_not_activate_demand():
+    """A 0.1 °C room delta must not start central heating by default."""
+    coord, hass = _build_coordinator(
+        idle_temperature=17.5,
+        rounding_mode=ROUNDING_MODE_HALF,
+        rounding_direction=ROUNDING_DIRECTION_CEILING,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.9, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.1)
+    assert coord.demand_active is False
+    assert coord.computed_setpoint == 17.5
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_demand_activates_at_activation_threshold():
+    """Demand starts once the room delta reaches the configured threshold."""
+    coord, hass = _build_coordinator(
+        idle_temperature=17.5,
+        min_change_threshold=0.0,
+        rounding_mode=ROUNDING_MODE_HALF,
+        rounding_direction=ROUNDING_DIRECTION_CEILING,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.7, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.3)
+    assert coord.demand_active is True
+    assert coord.raw_setpoint == pytest.approx(22.3)
+    assert coord.computed_setpoint == 22.5
+
+
+@pytest.mark.asyncio
+async def test_lower_target_is_read_and_written_with_preserved_upper_target():
+    """A range destination receives an atomic low/high service call."""
+    coord, hass = _build_coordinator(
+        destination_target=DESTINATION_TARGET_LOW,
+        min_change_threshold=0.0,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+        "climate.dest": _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=18.0,
+            target_temp_high=26.0,
+        ),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.destination_current_target == 18.0
+    assert coord.destination_paired_target == 26.0
+    assert coord.computed_setpoint == 22.0
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2] == {
+        "entity_id": "climate.dest",
+        "target_temp_low": 22.0,
+        "target_temp_high": 26.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_lower_target_re_reads_upper_target_immediately_before_write():
+    """The atomic range call preserves the latest, not a stale, upper target."""
+    coord, hass = _build_coordinator(
+        destination_target=DESTINATION_TARGET_LOW,
+        min_change_threshold=0.0,
+    )
+    room = _make_state(current_temperature=20.0, target_temperature=22.0)
+    initial_dest = _make_state(
+        current_temperature=20.0,
+        target_temperature=None,
+        target_temp_low=18.0,
+        target_temp_high=26.0,
+    )
+    latest_dest = _make_state(
+        current_temperature=20.0,
+        target_temperature=None,
+        target_temp_low=18.0,
+        target_temp_high=27.0,
+    )
+    destination_reads = iter((initial_dest, latest_dest))
+
+    def get_state(entity_id: str) -> MagicMock | None:
+        if entity_id == "climate.room1":
+            return room
+        if entity_id == "climate.dest":
+            return next(destination_reads)
+        return None
+
+    hass.states.get = get_state
+
+    await coord._async_evaluate()
+
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2] == {
+        "entity_id": "climate.dest",
+        "target_temp_low": 22.0,
+        "target_temp_high": 27.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_lower_target_is_clamped_to_preserved_upper_target():
+    """The lower range bound can never be written above the preserved upper bound."""
+    coord, hass = _build_coordinator(
+        destination_target=DESTINATION_TARGET_LOW,
+        min_change_threshold=0.0,
+        max_setpoint=35.0,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=15.0, target_temperature=30.0),
+        "climate.dest": _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=18.0,
+            target_temp_high=26.0,
+        ),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.computed_setpoint == 26.0
+    call_args = hass.services.async_call.call_args
+    assert call_args[0][2]["target_temp_low"] == 26.0
+    assert call_args[0][2]["target_temp_high"] == 26.0
+
+
+@pytest.mark.asyncio
+async def test_lower_target_requires_valid_upper_target():
+    """A range destination without a current upper bound is not written."""
+    coord, hass = _build_coordinator(
+        destination_target=DESTINATION_TARGET_LOW,
+        min_change_threshold=0.0,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+        "climate.dest": _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=18.0,
+        ),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.status == "destination_unavailable"
+    assert "target_temp_low" in coord.last_error
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_demand_hysteresis_holds_then_deactivates():
+    """Active demand persists through the hysteresis band and stops at 0.1 °C."""
+    coord, hass = _build_coordinator(
+        idle_temperature=17.5,
+        min_change_threshold=0.0,
+        rounding_mode=ROUNDING_MODE_1DEC,
+    )
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.7, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+    await coord._async_evaluate()
+    assert coord.demand_active is True
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.8, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=22.3),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == pytest.approx(0.2)
+    assert coord.demand_active is True
+    assert coord.computed_setpoint == 22.2
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.9, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=22.2),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == pytest.approx(0.1)
+    assert coord.demand_active is False
+    assert coord.computed_setpoint == 17.5
+
+
+@pytest.mark.asyncio
+async def test_hysteresis_band_does_not_activate_after_restart():
+    """A fresh coordinator stays idle when the initial delta is inside the band."""
+    coord, hass = _build_coordinator(idle_temperature=17.5)
+
+    _configure_states(hass, {
+        "climate.room1": _make_state(current_temperature=21.8, target_temperature=22.0),
+        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
+    })
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.2)
+    assert coord.demand_active is False
+    assert coord.computed_setpoint == 17.5
+
+
+@pytest.mark.asyncio
 async def test_rounding_direction_applies_to_raw_setpoint_not_delta():
     """Rounding direction is applied after destination_current + delta_max."""
     coord, hass = _build_coordinator(
         min_change_threshold=0.0,
         rounding_mode=ROUNDING_MODE_HALF,
         rounding_direction=ROUNDING_DIRECTION_CEILING,
+        demand_activation_threshold=0.0,
+        demand_deactivation_threshold=0.0,
     )
 
     # delta=0.1 and destination_current=19.1 produce raw=19.2.
@@ -731,6 +1013,40 @@ class TestHasRelevantChange:
         """Evaluate when target temperature changes."""
         old = _make_state(current_temperature=20.0, target_temperature=22.0)
         new = _make_state(current_temperature=20.0, target_temperature=23.0)
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_lower_target_temperature_changed(self):
+        """Evaluate when the lower range target changes."""
+        old = _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=18.0,
+            target_temp_high=26.0,
+        )
+        new = _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=19.0,
+            target_temp_high=26.0,
+        )
+        event = _make_event(old, new)
+        assert ClimateSyncCoordinator._has_relevant_change(event) is True
+
+    def test_upper_target_temperature_changed(self):
+        """Evaluate when the preserved upper range target changes."""
+        old = _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=18.0,
+            target_temp_high=26.0,
+        )
+        new = _make_state(
+            current_temperature=20.0,
+            target_temperature=None,
+            target_temp_low=18.0,
+            target_temp_high=27.0,
+        )
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
 

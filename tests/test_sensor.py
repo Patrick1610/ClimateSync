@@ -76,8 +76,12 @@ for mod_name, mod_obj in _modules.items():
 
 from custom_components.climatesync.const import (  # noqa: E402
     CONF_DESTINATION_ENTITY,
+    CONF_DESTINATION_TARGET,
     CONF_IDLE_TEMPERATURE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+    DEFAULT_DESTINATION_TARGET,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MIN_CHANGE_THRESHOLD,
     DEFAULT_MIN_SEND_INTERVAL,
@@ -119,6 +123,7 @@ def _build_coordinator(
     entry.data = {
         CONF_SOURCE_ENTITIES: source_entities,
         CONF_DESTINATION_ENTITY: destination_entity,
+        CONF_DESTINATION_TARGET: DEFAULT_DESTINATION_TARGET,
         CONF_IDLE_TEMPERATURE: DEFAULT_IDLE_TEMPERATURE,
     }
     entry.options = {
@@ -132,6 +137,7 @@ def _build_coordinator(
     coord = ClimateSyncCoordinator(hass, entry)
     coord._source_entities = list(source_entities)
     coord._destination_entity = destination_entity
+    coord._destination_target = DEFAULT_DESTINATION_TARGET
     coord._idle_temperature = float(DEFAULT_IDLE_TEMPERATURE)
     coord._rounding_mode = DEFAULT_ROUNDING_MODE
     coord._rounding_direction = DEFAULT_ROUNDING_DIRECTION
@@ -249,6 +255,34 @@ class TestSetpointDiagnostics:
         assert attrs["raw_setpoint"] == 19.2
         assert attrs["rounded_setpoint"] == 19.5
         assert attrs["final_setpoint"] == 19.5
+        assert attrs["destination_target"] == DEFAULT_DESTINATION_TARGET
+        assert attrs["demand_active"] is False
+        assert (
+            attrs["demand_activation_threshold"]
+            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        assert (
+            attrs["demand_deactivation_threshold"]
+            == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
+
+    def test_max_delta_attributes_include_demand_context(self):
+        coord, _ = _build_coordinator()
+        coord.delta_max = 0.3
+        coord.demand_active = True
+
+        sensor = MaxDeltaSensor(coord, coord.entry, _make_device_info())
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["demand_active"] is True
+        assert (
+            attrs["demand_activation_threshold"]
+            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        assert (
+            attrs["demand_deactivation_threshold"]
+            == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
 
     def test_status_attributes_include_rounding_context(self):
         coord, _ = _build_coordinator()
@@ -265,6 +299,16 @@ class TestSetpointDiagnostics:
         assert attrs["raw_setpoint"] == 19.2
         assert attrs["rounded_setpoint"] == 19.5
         assert attrs["final_setpoint"] == 19.5
+        assert attrs["destination_target"] == DEFAULT_DESTINATION_TARGET
+        assert attrs["demand_active"] is False
+        assert (
+            attrs["demand_activation_threshold"]
+            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+        )
+        assert (
+            attrs["demand_deactivation_threshold"]
+            == DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
+        )
 
     def test_rounding_attributes_fallback_to_final_setpoint(self):
         coord, _ = _build_coordinator()

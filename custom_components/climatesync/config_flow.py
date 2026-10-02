@@ -11,7 +11,10 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_DEMAND_ACTIVATION_THRESHOLD,
+    CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
+    CONF_DESTINATION_TARGET,
     CONF_IDLE_TEMPERATURE,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
@@ -20,6 +23,9 @@ from .const import (
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
     CONF_SOURCE_ENTITIES,
+    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+    DEFAULT_DESTINATION_TARGET,
     DEFAULT_IDLE_TEMPERATURE,
     DEFAULT_MAX_SETPOINT,
     DEFAULT_MIN_CHANGE_THRESHOLD,
@@ -27,6 +33,10 @@ from .const import (
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    DESTINATION_TARGET_HIGH,
+    DESTINATION_TARGET_LOW,
+    DESTINATION_TARGETS,
+    DESTINATION_TARGET_TEMPERATURE,
     DOMAIN,
     ROUNDING_DIRECTIONS,
     ROUNDING_MODES,
@@ -56,6 +66,7 @@ def _sources_schema(default_sources: list[str] | None = None) -> vol.Schema:
 
 def _destination_schema(
     default_dest: str | None = None,
+    default_destination_target: str = DEFAULT_DESTINATION_TARGET,
     default_idle: float = DEFAULT_IDLE_TEMPERATURE,
     default_max_setpoint: float = DEFAULT_MAX_SETPOINT,
     default_rounding: str = DEFAULT_ROUNDING_MODE,
@@ -63,6 +74,8 @@ def _destination_schema(
     default_resync: int = DEFAULT_RESYNC_INTERVAL,
     default_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD,
     default_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
+    default_demand_activation: float = DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+    default_demand_deactivation: float = DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
     include_advanced: bool = False,
 ) -> vol.Schema:
     fields: dict = {
@@ -70,6 +83,20 @@ def _destination_schema(
             {
                 "entity": {
                     "domain": CLIMATE_DOMAIN,
+                }
+            }
+        ),
+        vol.Required(
+            CONF_DESTINATION_TARGET,
+            default=default_destination_target,
+        ): selector.selector(
+            {
+                "select": {
+                    "options": [
+                        {"value": target, "label": target}
+                        for target in DESTINATION_TARGETS
+                    ],
+                    "translation_key": "destination_target",
                 }
             }
         ),
@@ -146,6 +173,38 @@ def _destination_schema(
                 }
             )
         )
+        fields[
+            vol.Required(
+                CONF_DEMAND_ACTIVATION_THRESHOLD,
+                default=default_demand_activation,
+            )
+        ] = selector.selector(
+            {
+                "number": {
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.1,
+                    "mode": "box",
+                    "unit_of_measurement": "°C",
+                }
+            }
+        )
+        fields[
+            vol.Required(
+                CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                default=default_demand_deactivation,
+            )
+        ] = selector.selector(
+            {
+                "number": {
+                    "min": 0.0,
+                    "max": 4.9,
+                    "step": 0.1,
+                    "mode": "box",
+                    "unit_of_measurement": "°C",
+                }
+            }
+        )
         fields[vol.Required(CONF_MIN_SEND_INTERVAL, default=default_send_interval)] = (
             selector.selector(
                 {
@@ -168,6 +227,40 @@ def _normalize_rounding_direction(value: Any) -> str:
     if value in ROUNDING_DIRECTIONS:
         return value
     return DEFAULT_ROUNDING_DIRECTION
+
+
+def _normalize_destination_target(value: Any) -> str:
+    """Return a safe destination target attribute."""
+    if value in DESTINATION_TARGETS:
+        return value
+    return DEFAULT_DESTINATION_TARGET
+
+
+def _destination_supports_target(state: Any, target: str) -> bool:
+    """Return whether a destination currently exposes the selected target."""
+    if state is None or state.state in ("unavailable", "unknown"):
+        return False
+
+    attributes = state.attributes
+    if target == DESTINATION_TARGET_LOW:
+        required = (DESTINATION_TARGET_LOW, DESTINATION_TARGET_HIGH)
+    else:
+        required = (DESTINATION_TARGET_TEMPERATURE,)
+
+    for attribute in required:
+        value = attributes.get(attribute)
+        if value is None or str(value).lower() in (
+            "unknown",
+            "unavailable",
+            "none",
+            "",
+        ):
+            return False
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -211,16 +304,24 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             dest = user_input.get(CONF_DESTINATION_ENTITY)
+            destination_target = _normalize_destination_target(
+                user_input.get(CONF_DESTINATION_TARGET)
+            )
             if dest in self._source_entities:
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif not _destination_supports_target(
+                self.hass.states.get(dest), destination_target
+            ):
+                errors[CONF_DESTINATION_TARGET] = "destination_target_unsupported"
             else:
                 return self.async_create_entry(
                     title="ClimateSync",
                     data={
                         CONF_SOURCE_ENTITIES: self._source_entities,
                         CONF_DESTINATION_ENTITY: dest,
+                        CONF_DESTINATION_TARGET: destination_target,
                         CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
                         CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                         CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
@@ -292,16 +393,31 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             dest = user_input.get(CONF_DESTINATION_ENTITY)
+            destination_target = _normalize_destination_target(
+                user_input.get(CONF_DESTINATION_TARGET)
+            )
             if dest in self._source_entities:
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif not _destination_supports_target(
+                self.hass.states.get(dest), destination_target
+            ):
+                errors[CONF_DESTINATION_TARGET] = "destination_target_unsupported"
+            elif (
+                user_input[CONF_DEMAND_DEACTIVATION_THRESHOLD]
+                >= user_input[CONF_DEMAND_ACTIVATION_THRESHOLD]
+            ):
+                errors[CONF_DEMAND_DEACTIVATION_THRESHOLD] = (
+                    "demand_threshold_order"
+                )
             else:
                 return self.async_create_entry(
                     title="",
                     data={
                         CONF_SOURCE_ENTITIES: self._source_entities,
                         CONF_DESTINATION_ENTITY: dest,
+                        CONF_DESTINATION_TARGET: destination_target,
                         CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
                         CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                         CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
@@ -311,6 +427,12 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                         CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
                         CONF_MIN_CHANGE_THRESHOLD: user_input[CONF_MIN_CHANGE_THRESHOLD],
                         CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
+                        CONF_DEMAND_ACTIVATION_THRESHOLD: user_input[
+                            CONF_DEMAND_ACTIVATION_THRESHOLD
+                        ],
+                        CONF_DEMAND_DEACTIVATION_THRESHOLD: user_input[
+                            CONF_DEMAND_DEACTIVATION_THRESHOLD
+                        ],
                     },
                 )
 
@@ -318,6 +440,9 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
             step_id="destination",
             data_schema=_destination_schema(
                 default_dest=self._get(CONF_DESTINATION_ENTITY, None),
+                default_destination_target=_normalize_destination_target(
+                    self._get(CONF_DESTINATION_TARGET, DEFAULT_DESTINATION_TARGET)
+                ),
                 default_idle=self._get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
                 default_max_setpoint=self._get(CONF_MAX_SETPOINT, DEFAULT_MAX_SETPOINT),
                 default_rounding=self._get(CONF_ROUNDING_MODE, DEFAULT_ROUNDING_MODE),
@@ -330,6 +455,14 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 ),
                 default_send_interval=self._get(
                     CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL
+                ),
+                default_demand_activation=self._get(
+                    CONF_DEMAND_ACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+                ),
+                default_demand_deactivation=self._get(
+                    CONF_DEMAND_DEACTIVATION_THRESHOLD,
+                    DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
                 ),
                 include_advanced=True,
             ),
