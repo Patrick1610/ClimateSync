@@ -5,6 +5,16 @@
 
 > **Developed with Plugwise Emma in mind. Source climates expose `current_temperature` and `temperature`; destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.2.6
+
+This release adds two first-class heating-demand binary sensors. **Heating
+Demand Active** follows all configured sources, while **Primary Heating Demand
+Active** follows only the user-selected primary subset. Both use the exact same
+configured activation and deactivation thresholds; the primary scope does not
+change destination control. The setup and options flows are now a documented
+four-step wizard with Next buttons between steps and Submit only on the final
+step.
+
 ## Release 1.2.5
 
 This release retains the clearer source-health diagnostics from 1.2.4 while
@@ -52,6 +62,7 @@ Even without an Emma, this delta-based method is more accurate than copying setp
 - Periodic resync (configurable, default 60 s) to recover from missed events.
 - Anti-flap: only sends `climate.set_temperature` when the change exceeds a configurable threshold (default 0.2 °C).
 - Configurable demand hysteresis: start heating at 0.3 °C room delta and stop at 0.1 °C by default.
+- All-source and primary-source heating-demand binary sensors, both driven by the configured hysteresis.
 - Destination target selection: ordinary `temperature` (default) or heating-range `target_temp_low`.
 - Rate limiting: maximum one service call per 10 seconds (configurable).
 - Rich diagnostic sensors including a `sensor.climatesync_status` that makes desyncs visible.
@@ -83,7 +94,17 @@ Navigate to **Settings → Devices & Services → Add Integration → ClimateSyn
 
 Select one or more **climate entities** that represent the rooms whose heating demand should be tracked. Each selected entity must expose `current_temperature` and `temperature` attributes.
 
-### Step 2 — Destination & basic settings
+### Step 2 — Primary sources
+
+Select the subset of source rooms that may enable other rooms to piggyback on
+an existing heating run. General destination control still uses **all** sources.
+A secondary room can therefore start heating when it falls below its own target,
+but it does not turn on `Primary Heating Demand Active`.
+
+Existing installations migrate with every existing source selected as primary,
+so the upgrade does not silently narrow their demand scope.
+
+### Step 3 — Destination & setpoint settings
 
 | Field | Default | Description |
 |---|---|---|
@@ -94,12 +115,26 @@ Select one or more **climate entities** that represent the rooms whose heating d
 | Rounding mode | 1 decimal | Step size used for the computed setpoint. |
 | Rounding direction | nearest | Whether the computed setpoint is rounded down, normally, or up within the selected rounding mode. |
 
+### Step 4 — Demand & safeguards
+
+| Option | Default | Description |
+|---|---|---|
+| Resync interval | 60 s | How often ClimateSync checks even without state changes. |
+| Minimum destination change | 0.2 °C | Only send a new destination setpoint when the change exceeds this. It does not determine demand state. |
+| Heating-demand activation threshold | 0.3 °C | Delta required to switch either demand scope on. |
+| Heating-demand deactivation threshold | 0.1 °C | Delta at or below which an active demand scope switches off. Must be lower than activation. |
+| Minimum send interval | 10 s | At most one destination service call per this many seconds. |
+
 ### Options Flow — reconfigure everything via the settings gear
 
-After setup, open the integration → **Configure** (⚙ gear icon) to get the same 2-step wizard again. You can change:
+After setup, open the integration → **Configure** (⚙ gear icon) to get the same
+four-step wizard again. Intermediate steps show **Next**; only the final step
+shows **Submit**. You can change:
 
-- **Step 1**: add or remove source rooms
-- **Step 2**: change the destination thermostat, idle temperature, maximum setpoint, rounding mode, rounding direction, and advanced options:
+- **Step 1**: add or remove source rooms;
+- **Step 2**: choose the primary subset;
+- **Step 3**: change destination and setpoint behaviour;
+- **Step 4**: change hysteresis, resync, anti-flap, and rate limiting.
 
 | Option | Default | Description |
 |---|---|---|
@@ -139,6 +174,10 @@ If demand is inactive and delta_max >= demand_activation_threshold:
     demand becomes active
 If demand is active and delta_max <= demand_deactivation_threshold:
     demand becomes inactive
+
+primary_delta_max = max(deltas of configured primary sources)
+Apply the same activation/deactivation hysteresis independently to
+primary_delta_max to calculate primary_demand_active
 
 If demand is inactive:
     setpoint_raw = idle_temperature        # No room needs heating
@@ -209,6 +248,26 @@ For Plugwise Emma, `0.5 steps` can be useful because Emma commonly accepts half-
 ## Entities
 
 All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas, destination target) are regular entities; the status sensor is classified as *diagnostic*.
+
+### Binary sensors
+
+#### Heating Demand Active — `binary_sensor.climatesync_heating_demand_active`
+
+Logical regulation demand across **all** configured sources. It switches on at
+the configured activation threshold and remains on until the maximum delta
+reaches the configured deactivation threshold. It means ClimateSync has a
+qualified heating request; it does not prove that the boiler is physically
+firing or that the destination accepted the last write.
+
+#### Primary Heating Demand Active — `binary_sensor.climatesync_primary_heating_demand_active`
+
+The same independently retained hysteresis state, calculated only over the
+configured primary subset. Use this entity to enable secondary rooms to
+piggyback without allowing those secondary rooms to trigger one another. It is
+unavailable when none of the configured primary sources has usable data.
+
+Both entities expose their scope, current maximum delta, leading source,
+thresholds, source list, and source-health diagnostics as attributes.
 
 ### Sensors
 

@@ -2,61 +2,97 @@
   "config": {
     "step": {
       "user": {
-        "title": "ClimateSync – Stap 1: Bronkamers",
-        "description": "Selecteer één of meer klimaatentiteiten (kamers) waarvan ClimateSync de warmtevraag bewaakt. Elke kamer moet een huidige temperatuur en een doeltemperatuur hebben.",
+        "title": "ClimateSync – Stap 1 van 4: Warmtebronnen",
+        "description": "Selecteer alle kamerthermostaten waarvan het temperatuurverschil de bestemming mag aansturen. De entiteit **Warmtevraag actief** gebruikt al deze bronnen. Een bron moet een actuele temperatuur en doeltemperatuur aanbieden; een uitgeschakelde bron met geldige actuele temperatuur telt als nul vraag.",
         "data": {
-          "source_entities": "Bron-klimaatentiteiten (kamers)"
+          "source_entities": "Bron-klimaatentiteiten"
+        }
+      },
+      "primary_sources": {
+        "title": "ClimateSync – Stap 2 van 4: Primaire bronnen",
+        "description": "Selecteer de kamers die andere kamers mogen laten meeliften op een bestaande verwarmingsronde. **Primaire warmtevraag actief** gebruikt alleen deze selectie en dezelfde hysterese als de algemene vraag. Een secundaire bron kan nog steeds algemene verwarming starten als hij onder zijn eigen doel komt, maar activeert de primaire-vraagentiteit niet.",
+        "data": {
+          "primary_source_entities": "Primaire bron-klimaatentiteiten"
         }
       },
       "destination": {
-        "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Selecteer de thermostaat die ClimateSync bestuurt. Kies **Doeltemperatuur** voor gewone climates of **Onderste doeltemperatuur** voor een climate met verwarmingsbereik. Bij een onderste doeltemperatuur behoudt ClimateSync de actuele bovengrens in dezelfde actie.",
+        "title": "ClimateSync – Stap 3 van 4: Bestemmingssetpoint",
+        "description": "Selecteer de thermostaat die ClimateSync bestuurt en hoe het setpoint wordt gevormd. Kies **Doeltemperatuur** voor gewone climates of **Onderste doeltemperatuur** voor een verwarmingsbereik; de actuele bovengrens blijft dan atomair behouden. De rusttemperatuur trekt vraag in en het maximumsetpoint is een harde veiligheidsgrens.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "destination_target": "Te bedienen doel van de bestemming",
-          "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
-          "max_setpoint": "Maximaal setpoint (°C) – harde bovengrens voor het bestemmingssetpoint",
-          "rounding_mode": "Afrondingsmodus voor het setpoint",
+          "idle_temperature": "Rusttemperatuur (°C)",
+          "max_setpoint": "Maximaal setpoint (°C)",
+          "rounding_mode": "Afrondingsstap setpoint",
           "rounding_direction": "Afrondingsrichting"
+        }
+      },
+      "control": {
+        "title": "ClimateSync – Stap 4 van 4: Vraag & beveiligingen",
+        "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** voorkomt onbeduidende schrijfopdrachten; deze bepaalt niet of vraag actief is. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
+        "data": {
+          "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
+          "min_change_threshold": "Minimale bestemmingswijziging (°C)",
+          "demand_activation_threshold": "Inschakeldrempel warmtevraag (°C)",
+          "demand_deactivation_threshold": "Uitschakeldrempel warmtevraag (°C)",
+          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
         }
       }
     },
     "error": {
       "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_primary_sources": "Selecteer ten minste één primaire bron.",
+      "primary_not_source": "Elke primaire bron moet ook als algemene bron geselecteerd zijn.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",
       "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
+      "demand_threshold_order": "De uitschakeldrempel moet lager zijn dan de inschakeldrempel.",
       "destination_target_unsupported": "De gekozen bestemming biedt het geselecteerde doel momenteel niet aan. Een onderste doeltemperatuur vereist ook een geldige bovengrens."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "ClimateSync – Stap 1: Bronkamers",
-        "description": "Wijzig welke klimaatentiteiten (kamers) ClimateSync bewaakt voor warmtevraag.",
+        "title": "ClimateSync – Stap 1 van 4: Warmtebronnen",
+        "description": "Selecteer alle kamerthermostaten waarvan het temperatuurverschil de bestemming mag aansturen. De entiteit **Warmtevraag actief** gebruikt al deze bronnen. Een verwijderde bron verdwijnt ook uit de beschikbare primaire selectie.",
         "data": {
-          "source_entities": "Bron-klimaatentiteiten (kamers)"
+          "source_entities": "Bron-klimaatentiteiten"
+        }
+      },
+      "primary_sources": {
+        "title": "ClimateSync – Stap 2 van 4: Primaire bronnen",
+        "description": "Selecteer de kamers die andere kamers mogen laten meeliften op een bestaande verwarmingsronde. **Primaire warmtevraag actief** gebruikt alleen deze selectie en dezelfde hysterese als de algemene vraag. Secundaire bronnen tellen wel mee voor algemene vraag, maar nooit voor primaire vraag.",
+        "data": {
+          "primary_source_entities": "Primaire bron-klimaatentiteiten"
         }
       },
       "destination": {
-        "title": "ClimateSync – Stap 2: Bestemming & Instellingen",
-        "description": "Wijzig de bestemmings-thermostaat en pas alle instellingen aan. Kies **Doeltemperatuur** voor gewone climates of **Onderste doeltemperatuur** voor een climate met verwarmingsbereik. Bij een onderste doeltemperatuur behoudt ClimateSync de actuele bovengrens in dezelfde actie. **Inschakeldrempel warmtevraag** bepaalt wanneer verwarming start; de lagere **uitschakeldrempel** bepaalt wanneer deze stopt.",
+        "title": "ClimateSync – Stap 3 van 4: Bestemmingssetpoint",
+        "description": "Kies de bestemmings-thermostaat en het setpointgedrag. Selecteer bij een verwarmingsbereik **Onderste doeltemperatuur**; ClimateSync behoudt de actuele bovengrens in dezelfde actie. De rusttemperatuur trekt vraag in en het maximumsetpoint blijft een harde grens.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "destination_target": "Te bedienen doel van de bestemming",
-          "idle_temperature": "Rusttemperatuur (°C) – gebruikt als geen kamer verwarming nodig heeft",
-          "max_setpoint": "Maximaal setpoint (°C) – harde bovengrens voor het bestemmingssetpoint",
-          "rounding_mode": "Afrondingsmodus voor het setpoint",
-          "rounding_direction": "Afrondingsrichting",
+          "idle_temperature": "Rusttemperatuur (°C)",
+          "max_setpoint": "Maximaal setpoint (°C)",
+          "rounding_mode": "Afrondingsstap setpoint",
+          "rounding_direction": "Afrondingsrichting"
+        }
+      },
+      "control": {
+        "title": "ClimateSync – Stap 4 van 4: Vraag & beveiligingen",
+        "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** onderdrukt alleen onbeduidende schrijfopdrachten. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
+        "data": {
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
-          "min_change_threshold": "Minimale wijzigingsdrempel (°C)",
-          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)",
+          "min_change_threshold": "Minimale bestemmingswijziging (°C)",
           "demand_activation_threshold": "Inschakeldrempel warmtevraag (°C)",
-          "demand_deactivation_threshold": "Uitschakeldrempel warmtevraag (°C)"
+          "demand_deactivation_threshold": "Uitschakeldrempel warmtevraag (°C)",
+          "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
         }
       }
     },
     "error": {
       "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_primary_sources": "Selecteer ten minste één primaire bron.",
+      "primary_not_source": "Elke primaire bron moet ook als algemene bron geselecteerd zijn.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",
       "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
       "demand_threshold_order": "De uitschakeldrempel moet lager zijn dan de inschakeldrempel.",

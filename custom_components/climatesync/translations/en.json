@@ -2,61 +2,97 @@
   "config": {
     "step": {
       "user": {
-        "title": "ClimateSync – Step 1: Source Rooms",
-        "description": "Select one or more climate entities (rooms) whose heating demand ClimateSync will track. Each room must expose a current temperature and a target temperature.",
+        "title": "ClimateSync – Step 1 of 4: Heating sources",
+        "description": "Select every room thermostat whose heating gap may control the destination. The **Heating Demand Active** entity uses all of these sources. A source must expose a current temperature and target temperature; an `off` source with a valid current temperature contributes zero demand.",
         "data": {
-          "source_entities": "Source climate entities (rooms)"
+          "source_entities": "Source climate entities"
+        }
+      },
+      "primary_sources": {
+        "title": "ClimateSync – Step 2 of 4: Primary sources",
+        "description": "Select the rooms that may enable other rooms to piggyback on an existing heating run. The **Primary Heating Demand Active** entity uses only this subset and the same hysteresis as general demand. A secondary source can still start general heating when it is below its own target, but it will not activate the primary-demand entity.",
+        "data": {
+          "primary_source_entities": "Primary source climate entities"
         }
       },
       "destination": {
-        "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Select the thermostat that ClimateSync will control. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating range climate. For a lower target, ClimateSync preserves the current upper target in the same action.",
+        "title": "ClimateSync – Step 3 of 4: Destination setpoint",
+        "description": "Select the thermostat ClimateSync controls and how the requested setpoint is formed. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating-range climate; the current upper target is then preserved atomically. The idle temperature withdraws demand, while the maximum setpoint is a hard safety ceiling.",
         "data": {
           "destination_entity": "Destination thermostat",
           "destination_target": "Destination target to control",
-          "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
-          "max_setpoint": "Maximum setpoint (°C) – hard ceiling for the destination setpoint",
-          "rounding_mode": "Rounding mode for the setpoint",
+          "idle_temperature": "Idle temperature (°C)",
+          "max_setpoint": "Maximum setpoint (°C)",
+          "rounding_mode": "Setpoint rounding step",
           "rounding_direction": "Rounding direction"
+        }
+      },
+      "control": {
+        "title": "ClimateSync – Step 4 of 4: Demand & safeguards",
+        "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** prevents insignificant destination writes; it does not decide whether demand is active. Resync recovers missed events and the minimum send interval rate-limits writes.",
+        "data": {
+          "resync_interval_seconds": "Resync interval (seconds)",
+          "min_change_threshold": "Minimum destination change (°C)",
+          "demand_activation_threshold": "Demand activation threshold (°C)",
+          "demand_deactivation_threshold": "Demand deactivation threshold (°C)",
+          "min_send_interval_seconds": "Minimum send interval (seconds)"
         }
       }
     },
     "error": {
       "no_sources": "Please select at least one source climate entity.",
+      "no_primary_sources": "Please select at least one primary source.",
+      "primary_not_source": "Every primary source must also be selected as a general source.",
       "no_destination": "Please select a destination thermostat.",
       "dest_is_source": "The destination thermostat cannot also be a source room.",
+      "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold.",
       "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "ClimateSync – Step 1: Source Rooms",
-        "description": "Change which climate entities (rooms) ClimateSync tracks for heating demand.",
+        "title": "ClimateSync – Step 1 of 4: Heating sources",
+        "description": "Select every room thermostat whose heating gap may control the destination. The **Heating Demand Active** entity uses all of these sources. Removing a source also removes it from the selectable primary subset.",
         "data": {
-          "source_entities": "Source climate entities (rooms)"
+          "source_entities": "Source climate entities"
+        }
+      },
+      "primary_sources": {
+        "title": "ClimateSync – Step 2 of 4: Primary sources",
+        "description": "Select the rooms that may enable other rooms to piggyback on an existing heating run. The **Primary Heating Demand Active** entity uses only this subset and the same hysteresis as general demand. Secondary sources still contribute to general demand but never to primary demand.",
+        "data": {
+          "primary_source_entities": "Primary source climate entities"
         }
       },
       "destination": {
-        "title": "ClimateSync – Step 2: Destination & Settings",
-        "description": "Change the destination thermostat and adjust all settings. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating range climate. For a lower target, ClimateSync preserves the current upper target in the same action. **Demand activation threshold**: room delta required to start heating. **Demand deactivation threshold**: lower delta at which heating stops.",
+        "title": "ClimateSync – Step 3 of 4: Destination setpoint",
+        "description": "Choose the destination thermostat and setpoint behaviour. For a heating-range climate, select **Lower target temperature**; ClimateSync preserves the current upper target in the same action. Idle withdraws demand, and the maximum setpoint remains a hard ceiling.",
         "data": {
           "destination_entity": "Destination thermostat",
           "destination_target": "Destination target to control",
-          "idle_temperature": "Idle temperature (°C) – used when no room needs heating",
-          "max_setpoint": "Maximum setpoint (°C) – hard ceiling for the destination setpoint",
-          "rounding_mode": "Rounding mode for the setpoint",
-          "rounding_direction": "Rounding direction",
+          "idle_temperature": "Idle temperature (°C)",
+          "max_setpoint": "Maximum setpoint (°C)",
+          "rounding_mode": "Setpoint rounding step",
+          "rounding_direction": "Rounding direction"
+        }
+      },
+      "control": {
+        "title": "ClimateSync – Step 4 of 4: Demand & safeguards",
+        "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** only suppresses insignificant destination writes. Resync recovers missed events and the minimum send interval rate-limits writes.",
+        "data": {
           "resync_interval_seconds": "Resync interval (seconds)",
-          "min_change_threshold": "Minimum change threshold (°C)",
-          "min_send_interval_seconds": "Minimum send interval (seconds)",
-          "demand_activation_threshold": "Heating-demand activation threshold (°C)",
-          "demand_deactivation_threshold": "Heating-demand deactivation threshold (°C)"
+          "min_change_threshold": "Minimum destination change (°C)",
+          "demand_activation_threshold": "Demand activation threshold (°C)",
+          "demand_deactivation_threshold": "Demand deactivation threshold (°C)",
+          "min_send_interval_seconds": "Minimum send interval (seconds)"
         }
       }
     },
     "error": {
       "no_sources": "Please select at least one source climate entity.",
+      "no_primary_sources": "Please select at least one primary source.",
+      "primary_not_source": "Every primary source must also be selected as a general source.",
       "no_destination": "Please select a destination thermostat.",
       "dest_is_source": "The destination thermostat cannot also be a source room.",
       "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold.",

@@ -1,4 +1,5 @@
 """Tests for ClimateSyncCoordinator."""
+
 from __future__ import annotations
 
 import sys
@@ -46,6 +47,7 @@ from custom_components.climatesync.const import (  # noqa: E402
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
+    CONF_PRIMARY_SOURCE_ENTITIES,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
@@ -85,6 +87,7 @@ from custom_components.climatesync.coordinator import (  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_state(
     current_temperature: float | None,
     target_temperature: float | None,
@@ -112,6 +115,7 @@ def _make_state(
 def _build_coordinator(
     *,
     source_entities: list[str] | None = None,
+    primary_source_entities: list[str] | None = None,
     destination_entity: str = "climate.dest",
     idle_temperature: float = DEFAULT_IDLE_TEMPERATURE,
     max_setpoint: float = DEFAULT_MAX_SETPOINT,
@@ -127,13 +131,17 @@ def _build_coordinator(
     """Build a coordinator with a fully-mocked hass/entry, return (coordinator, hass)."""
     if source_entities is None:
         source_entities = ["climate.room1"]
+    if primary_source_entities is None:
+        primary_source_entities = list(source_entities)
 
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
+    hass.async_create_task.side_effect = lambda coroutine: coroutine.close()
 
     entry = MagicMock()
     entry.data = {
         CONF_SOURCE_ENTITIES: source_entities,
+        CONF_PRIMARY_SOURCE_ENTITIES: primary_source_entities,
         CONF_DESTINATION_ENTITY: destination_entity,
         CONF_DESTINATION_TARGET: destination_target,
         CONF_IDLE_TEMPERATURE: idle_temperature,
@@ -153,6 +161,7 @@ def _build_coordinator(
     coord = ClimateSyncCoordinator(hass, entry)
     # Apply config without setting up real HA listeners
     coord._source_entities = list(source_entities)
+    coord._primary_source_entities = list(primary_source_entities)
     coord._destination_entity = destination_entity
     coord._destination_target = destination_target
     coord._idle_temperature = float(idle_temperature)
@@ -177,6 +186,7 @@ def _configure_states(hass: MagicMock, states: dict[str, MagicMock]) -> None:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestSafeFloat:
     """Unit tests for _safe_float helper."""
@@ -375,7 +385,9 @@ class TestRoundSetpoint:
 
         assert coord.rounding_direction == DEFAULT_ROUNDING_DIRECTION
         assert coord.rounding_direction == ROUNDING_DIRECTION_NEAREST
-        assert round_setpoint(19.2, coord.rounding_mode, coord.rounding_direction) == 19.0
+        assert (
+            round_setpoint(19.2, coord.rounding_mode, coord.rounding_direction) == 19.0
+        )
 
     def test_invalid_rounding_direction_falls_back_to_nearest(self):
         assert round_setpoint(19.3, ROUNDING_MODE_HALF, "invalid") == 19.5
@@ -384,8 +396,16 @@ class TestRoundSetpoint:
         assert round_setpoint(19.26, "invalid_mode", ROUNDING_DIRECTION_FLOOR) == 19.2
 
     def test_epsilon_safe_floor_and_ceiling(self):
-        assert round_setpoint(19.5000000001, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_FLOOR) == 19.5
-        assert round_setpoint(19.4999999999, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_CEILING) == 19.5
+        assert (
+            round_setpoint(19.5000000001, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_FLOOR)
+            == 19.5
+        )
+        assert (
+            round_setpoint(
+                19.4999999999, ROUNDING_MODE_HALF, ROUNDING_DIRECTION_CEILING
+            )
+            == 19.5
+        )
 
 
 def test_apply_options_invalid_rounding_direction_defaults_to_nearest():
@@ -407,6 +427,35 @@ def test_apply_options_reads_demand_hysteresis_thresholds():
 
     assert coord.demand_activation_threshold == 0.5
     assert coord.demand_deactivation_threshold == 0.2
+
+
+def test_initial_config_control_values_are_read_from_entry_data():
+    """Step-4 values stored during setup work before an options save."""
+    coord, _ = _build_coordinator()
+    coord.entry.options = {}
+    coord.entry.data[CONF_RESYNC_INTERVAL] = 120
+    coord.entry.data[CONF_MIN_CHANGE_THRESHOLD] = 0.5
+    coord.entry.data[CONF_MIN_SEND_INTERVAL] = 20
+
+    coord.async_apply_options()
+
+    assert coord._resync_interval == 120
+    assert coord._min_change_threshold == 0.5
+    assert coord._min_send_interval == 20
+
+
+def test_legacy_config_defaults_all_sources_to_primary():
+    """Entries created before primary selection preserve their old scope."""
+    coord, _ = _build_coordinator(source_entities=["climate.room1", "climate.room2"])
+    coord.entry.data.pop(CONF_PRIMARY_SOURCE_ENTITIES)
+    coord.entry.options.pop(CONF_PRIMARY_SOURCE_ENTITIES, None)
+
+    coord.async_apply_options()
+
+    assert coord.primary_source_entities == [
+        "climate.room1",
+        "climate.room2",
+    ]
 
 
 def test_apply_options_reads_destination_target():
@@ -434,6 +483,7 @@ def test_legacy_config_defaults_to_single_temperature_target():
 # Core coordinator tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_status_mismatch_is_set():
     """STATUS_MISMATCH is set when destination target differs from computed setpoint."""
@@ -441,17 +491,36 @@ async def test_status_mismatch_is_set():
 
     # Source room: target 23, current 20 → delta 3
     # Destination: current 20, existing target 18 (will mismatch computed 23)
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=23.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=23.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=18.0
+            ),
+        },
+    )
 
     # utcnow must advance so that mismatch_seconds > 0 on the second eval.
     # First eval sets mismatch_since; second eval computes elapsed > 0.
     t0 = datetime(2024, 1, 1, 12, 0, 0)
     t1 = t0 + timedelta(seconds=5)
-    call_times = iter([t0, t0, t0, t0, t0,   # first eval calls
-                       t1, t1, t1, t1, t1])   # second eval calls
+    call_times = iter(
+        [
+            t0,
+            t0,
+            t0,
+            t0,
+            t0,  # first eval calls
+            t1,
+            t1,
+            t1,
+            t1,
+            t1,
+        ]
+    )  # second eval calls
     _mock_dt_util.utcnow = MagicMock(side_effect=lambda: next(call_times))
 
     try:
@@ -477,10 +546,17 @@ async def test_status_ok_when_in_sync():
 
     # Source: target 22, current 20 → delta 2; dest current 20 → setpoint 22
     # Dest target already 22 → within threshold → anti-flap skips → no mismatch
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -494,10 +570,17 @@ async def test_blocking_true_in_service_call():
     coord, hass = _build_coordinator(min_change_threshold=0.2)
 
     # Force a mismatch large enough to trigger apply
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=25.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=25.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=18.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -513,10 +596,17 @@ async def test_anti_flap_skip_counter():
 
     # Computed setpoint = dest_current + delta = 20 + 2 = 22.0
     # Dest target already 22.1 → diff 0.1 < threshold 0.5 → anti-flap skip
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.1),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=22.1
+            ),
+        },
+    )
 
     assert coord.skipped_anti_flap == 0
     await coord._async_evaluate()
@@ -536,20 +626,34 @@ async def test_rate_limit_skip_counter():
     )
 
     # First call: mismatch triggers actual service call
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=25.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=25.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=18.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
     assert coord.skipped_rate_limit == 0
     assert hass.services.async_call.call_count == 1
 
     # Change dest target so anti-flap won't fire, but rate limit will
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=25.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=19.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=25.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=19.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
     assert coord.skipped_rate_limit == 1
@@ -561,10 +665,17 @@ async def test_evaluation_count_increments():
     """evaluation_count increases with each _async_evaluate call."""
     coord, hass = _build_coordinator()
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+        },
+    )
 
     assert coord.evaluation_count == 0
     await coord._async_evaluate()
@@ -580,10 +691,17 @@ async def test_apply_failure_sets_status():
     """STATUS_APPLY_FAILED is set when the service call raises an exception."""
     coord, hass = _build_coordinator(min_change_threshold=0.2)
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=25.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=25.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=18.0
+            ),
+        },
+    )
 
     hass.services.async_call = AsyncMock(side_effect=RuntimeError("connection lost"))
 
@@ -604,11 +722,20 @@ async def test_degraded_source_takes_priority_over_mismatch():
 
     # room1 is fine, room2 is unavailable
     # dest target 18 vs computed setpoint from room1 → mismatch exists too
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=25.0),
-        "climate.room2": _make_state(current_temperature=None, target_temperature=None, state="unavailable"),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=25.0
+            ),
+            "climate.room2": _make_state(
+                current_temperature=None, target_temperature=None, state="unavailable"
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=18.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -622,10 +749,13 @@ async def test_degraded_source_takes_priority_over_mismatch():
 async def test_off_source_with_valid_temperature_is_usable_zero_demand():
     """An off source with a valid measurement is inactive, not degraded."""
     coord, hass = _build_coordinator()
-    _configure_states(hass, {
-        "climate.room1": _make_state(20.0, None, state="off"),
-        "climate.dest": _make_state(20.0, DEFAULT_IDLE_TEMPERATURE),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(20.0, None, state="off"),
+            "climate.dest": _make_state(20.0, DEFAULT_IDLE_TEMPERATURE),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -641,14 +771,15 @@ async def test_off_source_with_valid_temperature_is_usable_zero_demand():
 @pytest.mark.asyncio
 async def test_no_usable_sources_applies_idle_fallback():
     """A complete source-data outage actively withdraws prior heat demand."""
-    coord, hass = _build_coordinator(
-        source_entities=["climate.room1", "climate.room2"]
+    coord, hass = _build_coordinator(source_entities=["climate.room1", "climate.room2"])
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(None, None, state="unavailable"),
+            "climate.room2": _make_state(20.0, None, state="heat"),
+            "climate.dest": _make_state(20.0, 18.0),
+        },
     )
-    _configure_states(hass, {
-        "climate.room1": _make_state(None, None, state="unavailable"),
-        "climate.room2": _make_state(20.0, None, state="heat"),
-        "climate.dest": _make_state(20.0, 18.0),
-    })
 
     await coord._async_evaluate()
 
@@ -672,15 +803,23 @@ async def test_no_usable_sources_applies_idle_fallback():
 # Status priority ordering
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_apply_failed_takes_priority_over_rate_limited():
     """STATUS_APPLY_FAILED takes priority over all other evaluation-level statuses."""
     coord, hass = _build_coordinator(min_change_threshold=0.2)
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=25.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=18.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=25.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=18.0
+            ),
+        },
+    )
 
     hass.services.async_call = AsyncMock(side_effect=RuntimeError("boom"))
 
@@ -692,15 +831,23 @@ async def test_apply_failed_takes_priority_over_rate_limited():
 # Additional edge-case tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_destination_unavailable_when_state_unavailable():
     """STATUS_DESTINATION_UNAVAILABLE when destination entity is unavailable."""
     coord, hass = _build_coordinator()
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable"),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=22.0, state="unavailable"
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -715,9 +862,14 @@ async def test_destination_unavailable_when_entity_missing():
     coord, hass = _build_coordinator()
 
     # Destination entity returns None (not in HA state machine)
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -730,10 +882,17 @@ async def test_resync_increments_count():
     """Periodic resync callback increments resync_count and triggers evaluation."""
     coord, hass = _build_coordinator()
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=22.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+        },
+    )
 
     assert coord.resync_count == 0
     coord._async_resync(None)
@@ -763,10 +922,17 @@ async def test_idle_temperature_when_no_demand():
     coord, hass = _build_coordinator(idle_temperature=5.0)
 
     # Room is already at target → delta = 0
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=22.0, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=20.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=22.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=20.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -783,10 +949,17 @@ async def test_small_positive_delta_does_not_activate_demand():
         rounding_direction=ROUNDING_DIRECTION_CEILING,
     )
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=21.9, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=21.9, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=22.0, target_temperature=17.5
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -806,10 +979,17 @@ async def test_demand_activates_at_activation_threshold():
         rounding_direction=ROUNDING_DIRECTION_CEILING,
     )
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=21.7, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=21.7, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=22.0, target_temperature=17.5
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -827,15 +1007,20 @@ async def test_lower_target_is_read_and_written_with_preserved_upper_target():
         min_change_threshold=0.0,
     )
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(
-            current_temperature=20.0,
-            target_temperature=None,
-            target_temp_low=18.0,
-            target_temp_high=26.0,
-        ),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0,
+                target_temperature=None,
+                target_temp_low=18.0,
+                target_temp_high=26.0,
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -900,15 +1085,20 @@ async def test_lower_target_is_clamped_to_preserved_upper_target():
         max_setpoint=35.0,
     )
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=15.0, target_temperature=30.0),
-        "climate.dest": _make_state(
-            current_temperature=20.0,
-            target_temperature=None,
-            target_temp_low=18.0,
-            target_temp_high=26.0,
-        ),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=15.0, target_temperature=30.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0,
+                target_temperature=None,
+                target_temp_low=18.0,
+                target_temp_high=26.0,
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -926,14 +1116,19 @@ async def test_lower_target_requires_valid_upper_target():
         min_change_threshold=0.0,
     )
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
-        "climate.dest": _make_state(
-            current_temperature=20.0,
-            target_temperature=None,
-            target_temp_low=18.0,
-        ),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0,
+                target_temperature=None,
+                target_temp_low=18.0,
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -951,26 +1146,47 @@ async def test_demand_hysteresis_holds_then_deactivates():
         rounding_mode=ROUNDING_MODE_1DEC,
     )
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=21.7, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=21.7, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=22.0, target_temperature=17.5
+            ),
+        },
+    )
     await coord._async_evaluate()
     assert coord.demand_active is True
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=21.8, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=22.0, target_temperature=22.3),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=21.8, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=22.0, target_temperature=22.3
+            ),
+        },
+    )
     await coord._async_evaluate()
     assert coord.delta_max == pytest.approx(0.2)
     assert coord.demand_active is True
     assert coord.computed_setpoint == 22.2
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=21.9, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=22.0, target_temperature=22.2),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=21.9, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=22.0, target_temperature=22.2
+            ),
+        },
+    )
     await coord._async_evaluate()
     assert coord.delta_max == pytest.approx(0.1)
     assert coord.demand_active is False
@@ -978,14 +1194,125 @@ async def test_demand_hysteresis_holds_then_deactivates():
 
 
 @pytest.mark.asyncio
+async def test_secondary_source_can_start_general_but_not_primary_demand():
+    """Secondary demand controls the destination without enabling piggyback."""
+    coord, hass = _build_coordinator(
+        source_entities=["climate.primary", "climate.secondary"],
+        primary_source_entities=["climate.primary"],
+        demand_activation_threshold=0.5,
+        demand_deactivation_threshold=0.1,
+        min_change_threshold=0.0,
+    )
+    _configure_states(
+        hass,
+        {
+            "climate.primary": _make_state(20.0, 20.2),
+            "climate.secondary": _make_state(20.0, 20.6),
+            "climate.dest": _make_state(20.0, 17.5),
+        },
+    )
+
+    await coord._async_evaluate()
+
+    assert coord.delta_max == pytest.approx(0.6)
+    assert coord.demand_active is True
+    assert coord.primary_delta_max == pytest.approx(0.2)
+    assert coord.primary_demand_active is False
+    assert coord.leading_room == "climate.secondary"
+    assert coord.primary_leading_room == "climate.primary"
+    assert coord.computed_setpoint == pytest.approx(20.6)
+
+
+@pytest.mark.asyncio
+async def test_primary_demand_uses_same_hysteresis_thresholds():
+    """Primary demand starts, holds, and stops at the shared thresholds."""
+    coord, hass = _build_coordinator(
+        source_entities=["climate.primary", "climate.secondary"],
+        primary_source_entities=["climate.primary"],
+        demand_activation_threshold=0.5,
+        demand_deactivation_threshold=0.1,
+        min_change_threshold=0.0,
+    )
+
+    _configure_states(
+        hass,
+        {
+            "climate.primary": _make_state(20.0, 20.5),
+            "climate.secondary": _make_state(20.0, 20.0),
+            "climate.dest": _make_state(20.0, 17.5),
+        },
+    )
+    await coord._async_evaluate()
+    assert coord.primary_demand_active is True
+
+    _configure_states(
+        hass,
+        {
+            "climate.primary": _make_state(20.0, 20.3),
+            "climate.secondary": _make_state(20.0, 20.0),
+            "climate.dest": _make_state(20.0, 20.5),
+        },
+    )
+    await coord._async_evaluate()
+    assert coord.primary_delta_max == pytest.approx(0.3)
+    assert coord.primary_demand_active is True
+
+    _configure_states(
+        hass,
+        {
+            "climate.primary": _make_state(20.0, 20.1),
+            "climate.secondary": _make_state(20.0, 20.0),
+            "climate.dest": _make_state(20.0, 20.3),
+        },
+    )
+    await coord._async_evaluate()
+    assert coord.primary_delta_max == pytest.approx(0.1)
+    assert coord.primary_demand_active is False
+
+
+@pytest.mark.asyncio
+async def test_unusable_primary_scope_is_not_reported_as_active():
+    """A degraded primary subset never reuses a stale active state."""
+    coord, hass = _build_coordinator(
+        source_entities=["climate.primary", "climate.secondary"],
+        primary_source_entities=["climate.primary"],
+        demand_activation_threshold=0.5,
+        demand_deactivation_threshold=0.1,
+    )
+    coord.primary_demand_active = True
+    _configure_states(
+        hass,
+        {
+            "climate.primary": _make_state(None, None, state="unavailable"),
+            "climate.secondary": _make_state(20.0, 21.0),
+            "climate.dest": _make_state(20.0, 21.0),
+        },
+    )
+
+    await coord._async_evaluate()
+
+    assert coord.demand_active is True
+    assert coord.primary_usable_source_count == 0
+    assert coord.primary_degraded_source_entities == ["climate.primary"]
+    assert coord.primary_demand_active is False
+
+
+@pytest.mark.asyncio
 async def test_hysteresis_band_does_not_activate_after_restart():
     """A fresh coordinator stays idle when the initial delta is inside the band."""
     coord, hass = _build_coordinator(idle_temperature=17.5)
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=21.8, target_temperature=22.0),
-        "climate.dest": _make_state(current_temperature=22.0, target_temperature=17.5),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=21.8, target_temperature=22.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=22.0, target_temperature=17.5
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -1008,10 +1335,17 @@ async def test_rounding_direction_applies_to_raw_setpoint_not_delta():
     # delta=0.1 and destination_current=19.1 produce raw=19.2.
     # Ceiling raw 19.2 to half steps gives 19.5. If the delta were rounded
     # separately first, this would become 20.0, which is not desired.
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=20.0, target_temperature=20.1),
-        "climate.dest": _make_state(current_temperature=19.1, target_temperature=5.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=20.1
+            ),
+            "climate.dest": _make_state(
+                current_temperature=19.1, target_temperature=5.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -1025,6 +1359,7 @@ async def test_rounding_direction_applies_to_raw_setpoint_not_delta():
 # ---------------------------------------------------------------------------
 # State-change filtering tests
 # ---------------------------------------------------------------------------
+
 
 def _make_event(old_state: MagicMock | None, new_state: MagicMock | None) -> MagicMock:
     """Return a mock state_changed event."""
@@ -1050,8 +1385,12 @@ class TestHasRelevantChange:
 
     def test_main_state_changed(self):
         """Evaluate when main state changes (e.g. heat → off)."""
-        old = _make_state(current_temperature=20.0, target_temperature=22.0, state="heat")
-        new = _make_state(current_temperature=20.0, target_temperature=22.0, state="off")
+        old = _make_state(
+            current_temperature=20.0, target_temperature=22.0, state="heat"
+        )
+        new = _make_state(
+            current_temperature=20.0, target_temperature=22.0, state="off"
+        )
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
 
@@ -1121,8 +1460,12 @@ class TestHasRelevantChange:
 
     def test_unavailable_state_triggers_evaluation(self):
         """Evaluate when entity becomes unavailable."""
-        old = _make_state(current_temperature=20.0, target_temperature=22.0, state="heat")
-        new = _make_state(current_temperature=20.0, target_temperature=22.0, state="unavailable")
+        old = _make_state(
+            current_temperature=20.0, target_temperature=22.0, state="heat"
+        )
+        new = _make_state(
+            current_temperature=20.0, target_temperature=22.0, state="unavailable"
+        )
         event = _make_event(old, new)
         assert ClimateSyncCoordinator._has_relevant_change(event) is True
 
@@ -1131,6 +1474,7 @@ class TestHasRelevantChange:
 # Max setpoint cap tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_max_setpoint_clamps_computed_value():
     """Setpoint is clamped to max_setpoint when the raw value exceeds it."""
@@ -1138,10 +1482,17 @@ async def test_max_setpoint_clamps_computed_value():
     # With max_setpoint=35 the coordinator must cap it at 35.
     coord, hass = _build_coordinator(max_setpoint=35.0, min_change_threshold=0.2)
 
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=9.9, target_temperature=35.0),
-        "climate.dest": _make_state(current_temperature=19.9, target_temperature=5.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=9.9, target_temperature=35.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=19.9, target_temperature=5.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -1159,10 +1510,17 @@ async def test_max_setpoint_does_not_clamp_normal_value():
     coord, hass = _build_coordinator(max_setpoint=35.0, min_change_threshold=0.2)
 
     # delta=5, dest_current=20 → setpoint=25, well below max_setpoint
-    _configure_states(hass, {
-        "climate.room1": _make_state(current_temperature=15.0, target_temperature=20.0),
-        "climate.dest": _make_state(current_temperature=20.0, target_temperature=5.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(
+                current_temperature=15.0, target_temperature=20.0
+            ),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=5.0
+            ),
+        },
+    )
 
     await coord._async_evaluate()
 
@@ -1172,6 +1530,7 @@ async def test_max_setpoint_does_not_clamp_normal_value():
 # ---------------------------------------------------------------------------
 # Double-listener bug regression test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_async_setup_registers_listeners_exactly_once():
@@ -1206,6 +1565,7 @@ async def test_async_setup_registers_listeners_exactly_once():
 # Destination-triggered rate-limit bypass tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_rate_limit_bypassed_when_destination_triggers_evaluation():
     """When the destination itself changes its reported temperature, the rate
@@ -1233,10 +1593,17 @@ async def test_rate_limit_bypassed_when_destination_triggers_evaluation():
         coord.last_service_call_time = t0  # last call was 2s ago
 
         # Step 2: destination reports 45, but computed setpoint is 35
-        _configure_states(hass, {
-            "climate.room1": _make_state(current_temperature=19.7, target_temperature=35.0),
-            "climate.dest": _make_state(current_temperature=19.9, target_temperature=45.0),
-        })
+        _configure_states(
+            hass,
+            {
+                "climate.room1": _make_state(
+                    current_temperature=19.7, target_temperature=35.0
+                ),
+                "climate.dest": _make_state(
+                    current_temperature=19.9, target_temperature=45.0
+                ),
+            },
+        )
 
         # Step 3: evaluate as if triggered by the destination changing (bypass=True)
         await coord._async_evaluate(bypass_rate_limit=True)
@@ -1265,10 +1632,17 @@ async def test_rate_limit_still_applies_for_source_triggered_evaluation():
         mock_dt.utcnow = MagicMock(return_value=t2s)
         coord.last_service_call_time = t0  # last call was 2s ago
 
-        _configure_states(hass, {
-            "climate.room1": _make_state(current_temperature=19.7, target_temperature=35.0),
-            "climate.dest": _make_state(current_temperature=19.9, target_temperature=20.0),
-        })
+        _configure_states(
+            hass,
+            {
+                "climate.room1": _make_state(
+                    current_temperature=19.7, target_temperature=35.0
+                ),
+                "climate.dest": _make_state(
+                    current_temperature=19.9, target_temperature=20.0
+                ),
+            },
+        )
 
         # Source-triggered evaluation (bypass=False, the default)
         await coord._async_evaluate(bypass_rate_limit=False)

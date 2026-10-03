@@ -3,6 +3,7 @@
 DOMAIN = "climatesync"
 
 CONF_SOURCE_ENTITIES = "source_entities"
+CONF_PRIMARY_SOURCE_ENTITIES = "primary_source_entities"
 CONF_DESTINATION_ENTITY = "destination_entity"
 CONF_DESTINATION_TARGET = "destination_target"
 CONF_IDLE_TEMPERATURE = "idle_temperature"

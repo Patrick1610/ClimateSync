@@ -1,4 +1,5 @@
 """ClimateSync coordinator: delta algorithm, anti-flap, rate limiting, resync."""
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,7 @@ from .const import (
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
+    CONF_PRIMARY_SOURCE_ENTITIES,
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
@@ -43,9 +45,9 @@ from .const import (
     ROUNDING_DIRECTION_CEILING,
     ROUNDING_DIRECTION_FLOOR,
     ROUNDING_DIRECTIONS,
-    ROUNDING_MODES,
     ROUNDING_MODE_2DEC,
     ROUNDING_MODE_HALF,
+    ROUNDING_MODES,
     STATUS_APPLY_FAILED,
     STATUS_DEGRADED_SOURCE_DATA,
     STATUS_DESTINATION_UNAVAILABLE,
@@ -132,6 +134,18 @@ def _apply_rounding(value: float, mode: str) -> float:
     return round_setpoint(value, mode, DEFAULT_ROUNDING_DIRECTION)
 
 
+def _next_demand_state(
+    current_state: bool,
+    delta: float,
+    activation_threshold: float,
+    deactivation_threshold: float,
+) -> bool:
+    """Apply the configured hysteresis to one demand scope."""
+    if current_state:
+        return delta > deactivation_threshold + _DEMAND_EPSILON
+    return delta + _DEMAND_EPSILON >= activation_threshold
+
+
 class ClimateSyncCoordinator:
     """Drives delta-based thermostat synchronisation."""
 
@@ -142,6 +156,7 @@ class ClimateSyncCoordinator:
 
         # Resolved config / options
         self._source_entities: list[str] = []
+        self._primary_source_entities: list[str] = []
         self._destination_entity: str = ""
         self._destination_target: str = DEFAULT_DESTINATION_TARGET
         self._idle_temperature: float = DEFAULT_IDLE_TEMPERATURE
@@ -151,9 +166,7 @@ class ClimateSyncCoordinator:
         self._resync_interval: int = DEFAULT_RESYNC_INTERVAL
         self._min_change_threshold: float = DEFAULT_MIN_CHANGE_THRESHOLD
         self._min_send_interval: int = DEFAULT_MIN_SEND_INTERVAL
-        self._demand_activation_threshold: float = (
-            DEFAULT_DEMAND_ACTIVATION_THRESHOLD
-        )
+        self._demand_activation_threshold: float = DEFAULT_DEMAND_ACTIVATION_THRESHOLD
         self._demand_deactivation_threshold: float = (
             DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
         )
@@ -166,6 +179,12 @@ class ClimateSyncCoordinator:
         self.usable_source_count: int = 0
         self.degraded_source_entities: list[str] = []
         self.inactive_source_entities: list[str] = []
+        self.primary_delta_max: float = 0.0
+        self.primary_leading_room: str | None = None
+        self.primary_demand_active: bool = False
+        self.primary_usable_source_count: int = 0
+        self.primary_degraded_source_entities: list[str] = []
+        self.primary_inactive_source_entities: list[str] = []
 
         # Destination tracking
         self.destination_current_temperature: float | None = None
@@ -216,6 +235,18 @@ class ClimateSyncCoordinator:
         self._source_entities = list(
             opts.get(CONF_SOURCE_ENTITIES, data.get(CONF_SOURCE_ENTITIES, []))
         )
+        configured_primary_sources = list(
+            opts.get(
+                CONF_PRIMARY_SOURCE_ENTITIES,
+                data.get(CONF_PRIMARY_SOURCE_ENTITIES, self._source_entities),
+            )
+        )
+        configured_primary_set = set(configured_primary_sources)
+        self._primary_source_entities = [
+            entity_id
+            for entity_id in self._source_entities
+            if entity_id in configured_primary_set
+        ]
         self._destination_entity = opts.get(
             CONF_DESTINATION_ENTITY, data.get(CONF_DESTINATION_ENTITY, "")
         )
@@ -254,13 +285,22 @@ class ClimateSyncCoordinator:
             )
         )
         self._resync_interval = int(
-            opts.get(CONF_RESYNC_INTERVAL, DEFAULT_RESYNC_INTERVAL)
+            opts.get(
+                CONF_RESYNC_INTERVAL,
+                data.get(CONF_RESYNC_INTERVAL, DEFAULT_RESYNC_INTERVAL),
+            )
         )
         self._min_change_threshold = float(
-            opts.get(CONF_MIN_CHANGE_THRESHOLD, DEFAULT_MIN_CHANGE_THRESHOLD)
+            opts.get(
+                CONF_MIN_CHANGE_THRESHOLD,
+                data.get(CONF_MIN_CHANGE_THRESHOLD, DEFAULT_MIN_CHANGE_THRESHOLD),
+            )
         )
         self._min_send_interval = int(
-            opts.get(CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL)
+            opts.get(
+                CONF_MIN_SEND_INTERVAL,
+                data.get(CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL),
+            )
         )
         self._demand_activation_threshold = float(
             opts.get(
@@ -440,9 +480,7 @@ class ClimateSyncCoordinator:
                     "source_status": "unavailable",
                 }
                 self.degraded_source_entities.append(entity_id)
-                _LOGGER.debug(
-                    "ClimateSync: source %s unavailable", entity_id
-                )
+                _LOGGER.debug("ClimateSync: source %s unavailable", entity_id)
                 continue
 
             current = _safe_float(state.attributes.get("current_temperature"))
@@ -491,21 +529,51 @@ class ClimateSyncCoordinator:
         self.delta_max = max_delta
         self.leading_room = leading
 
+        primary_rows = {
+            entity_id: self.room_deltas[entity_id]
+            for entity_id in self._primary_source_entities
+            if entity_id in self.room_deltas
+        }
+        self.primary_usable_source_count = sum(
+            row["source_status"] in ("active", "inactive_off")
+            for row in primary_rows.values()
+        )
+        self.primary_degraded_source_entities = [
+            entity_id
+            for entity_id, row in primary_rows.items()
+            if row["source_status"] in ("unavailable", "missing_temperature")
+        ]
+        self.primary_inactive_source_entities = [
+            entity_id
+            for entity_id, row in primary_rows.items()
+            if row["source_status"] == "inactive_off"
+        ]
+        self.primary_delta_max = 0.0
+        self.primary_leading_room = None
+        for entity_id, row in primary_rows.items():
+            if row["delta"] > self.primary_delta_max:
+                self.primary_delta_max = row["delta"]
+                self.primary_leading_room = entity_id
+
         # Apply demand hysteresis before setpoint calculation. A small positive
         # source delta is often measurement or rounding noise and must not turn
         # the central heat source on. Once demand is active, keep it active
         # until the lower deactivation threshold is reached.
-        if self.demand_active:
-            if (
-                max_delta
-                <= self._demand_deactivation_threshold + _DEMAND_EPSILON
-            ):
-                self.demand_active = False
-        elif (
-            max_delta + _DEMAND_EPSILON
-            >= self._demand_activation_threshold
-        ):
-            self.demand_active = True
+        self.demand_active = _next_demand_state(
+            self.demand_active,
+            max_delta,
+            self._demand_activation_threshold,
+            self._demand_deactivation_threshold,
+        )
+        if self.primary_usable_source_count == 0:
+            self.primary_demand_active = False
+        else:
+            self.primary_demand_active = _next_demand_state(
+                self.primary_demand_active,
+                self.primary_delta_max,
+                self._demand_activation_threshold,
+                self._demand_deactivation_threshold,
+            )
 
         # Compute setpoint
         if not self.demand_active:
@@ -587,7 +655,9 @@ class ClimateSyncCoordinator:
         self.status = STATUS_OK
 
         # Apply setpoint
-        await self._async_apply_setpoint(setpoint_final, bypass_rate_limit=bypass_rate_limit)
+        await self._async_apply_setpoint(
+            setpoint_final, bypass_rate_limit=bypass_rate_limit
+        )
 
         # Determine final status: preserve apply-specific status, then layer on
         # evaluation-level statuses in priority order.
@@ -739,6 +809,11 @@ class ClimateSyncCoordinator:
     def source_entities(self) -> list[str]:
         """Return source entity ids."""
         return self._source_entities
+
+    @property
+    def primary_source_entities(self) -> list[str]:
+        """Return primary source entity ids."""
+        return self._primary_source_entities
 
     @property
     def destination_entity(self) -> str:

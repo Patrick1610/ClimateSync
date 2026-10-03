@@ -7,12 +7,33 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN
+from .const import CONF_PRIMARY_SOURCE_ENTITIES, CONF_SOURCE_ENTITIES, DOMAIN
 from .coordinator import ClimateSyncCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "binary_sensor"]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate legacy entries while preserving their existing behaviour."""
+    if entry.version == 1:
+        data = dict(entry.data)
+        effective_sources = list(
+            entry.options.get(
+                CONF_SOURCE_ENTITIES,
+                data.get(CONF_SOURCE_ENTITIES, []),
+            )
+        )
+        data.setdefault(CONF_PRIMARY_SOURCE_ENTITIES, effective_sources)
+        hass.config_entries.async_update_entry(entry, data=data, version=2)
+        _LOGGER.info(
+            "Migrated ClimateSync entry %s to version 2; all existing sources "
+            "remain primary until changed in Configure",
+            entry.entry_id,
+        )
+
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
