@@ -1,4 +1,5 @@
 """Tests for ClimateSync sensor entities."""
+
 from __future__ import annotations
 
 import enum
@@ -6,8 +7,6 @@ import sys
 from datetime import datetime
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Mock the homeassistant package tree before importing sensor module.
@@ -29,6 +28,7 @@ class _EntityCategory(enum.Enum):
 # --- Real stub for SensorEntity ---
 class _SensorEntity:
     """Minimal stand-in for homeassistant.components.sensor.SensorEntity."""
+
     _attr_has_entity_name: bool = False
     _attr_entity_category = None
     _attr_device_class = None
@@ -39,11 +39,30 @@ class _SensorEntity:
     _attr_device_info = None
 
 
+class _BinarySensorEntity:
+    """Minimal stand-in for a Home Assistant BinarySensorEntity."""
+
+    _attr_has_entity_name: bool = False
+    _attr_device_class = None
+    _attr_name: str | None = None
+    _attr_unique_id: str | None = None
+    _attr_device_info = None
+
+
+class _BinarySensorDeviceClass(enum.Enum):
+    HEAT = "heat"
+
+
 # Build a real module for homeassistant.components.sensor
 _sensor_mod = ModuleType("homeassistant.components.sensor")
 _sensor_mod.SensorEntity = _SensorEntity
 _sensor_mod.SensorDeviceClass = MagicMock()
 _sensor_mod.SensorStateClass = MagicMock()
+
+# Build a real module for homeassistant.components.binary_sensor
+_binary_sensor_mod = ModuleType("homeassistant.components.binary_sensor")
+_binary_sensor_mod.BinarySensorEntity = _BinarySensorEntity
+_binary_sensor_mod.BinarySensorDeviceClass = _BinarySensorDeviceClass
 
 # Build a real module for homeassistant.helpers.entity
 _entity_mod = ModuleType("homeassistant.helpers.entity")
@@ -60,6 +79,7 @@ _modules = {
     "homeassistant": _mock_ha,
     "homeassistant.components": _mock_ha.components,
     "homeassistant.components.sensor": _sensor_mod,
+    "homeassistant.components.binary_sensor": _binary_sensor_mod,
     "homeassistant.config_entries": _mock_ha.config_entries,
     "homeassistant.const": _mock_ha.const,
     "homeassistant.core": _mock_ha.core,
@@ -74,6 +94,10 @@ _modules = {
 for mod_name, mod_obj in _modules.items():
     sys.modules.setdefault(mod_name, mod_obj)
 
+from custom_components.climatesync.binary_sensor import (  # noqa: E402
+    HeatingDemandActiveBinarySensor,
+    PrimaryHeatingDemandActiveBinarySensor,
+)
 from custom_components.climatesync.const import (  # noqa: E402
     CONF_DESTINATION_ENTITY,
     CONF_DESTINATION_TARGET,
@@ -98,9 +122,7 @@ from custom_components.climatesync.sensor import (  # noqa: E402
     MaxDeltaSensor,
     RoomDeltaSensor,
     StatusSensor,
-    _entry_unique_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,6 +158,7 @@ def _build_coordinator(
 
     coord = ClimateSyncCoordinator(hass, entry)
     coord._source_entities = list(source_entities)
+    coord._primary_source_entities = list(source_entities)
     coord._destination_entity = destination_entity
     coord._destination_target = DEFAULT_DESTINATION_TARGET
     coord._idle_temperature = float(DEFAULT_IDLE_TEMPERATURE)
@@ -161,32 +184,102 @@ class TestEntityCategorization:
     def test_room_delta_is_not_diagnostic(self):
         """RoomDeltaSensor should NOT have entity_category set (regular sensor)."""
         coord, _ = _build_coordinator()
-        sensor = RoomDeltaSensor(coord, coord.entry, "climate.room1", _make_device_info())
-        assert not hasattr(sensor, "_attr_entity_category") or sensor._attr_entity_category is None
+        sensor = RoomDeltaSensor(
+            coord, coord.entry, "climate.room1", _make_device_info()
+        )
+        assert (
+            not hasattr(sensor, "_attr_entity_category")
+            or sensor._attr_entity_category is None
+        )
 
     def test_max_delta_is_not_diagnostic(self):
         """MaxDeltaSensor should NOT have entity_category set (regular sensor)."""
         coord, _ = _build_coordinator()
         sensor = MaxDeltaSensor(coord, coord.entry, _make_device_info())
-        assert not hasattr(sensor, "_attr_entity_category") or sensor._attr_entity_category is None
+        assert (
+            not hasattr(sensor, "_attr_entity_category")
+            or sensor._attr_entity_category is None
+        )
 
     def test_setpoint_is_not_diagnostic(self):
         """DestinationSetpointSensor should NOT have entity_category set (regular sensor)."""
         coord, _ = _build_coordinator()
         sensor = DestinationSetpointSensor(coord, coord.entry, _make_device_info())
-        assert not hasattr(sensor, "_attr_entity_category") or sensor._attr_entity_category is None
+        assert (
+            not hasattr(sensor, "_attr_entity_category")
+            or sensor._attr_entity_category is None
+        )
 
     def test_destination_current_target_is_not_diagnostic(self):
         """DestinationCurrentTargetSensor should NOT have entity_category set."""
         coord, _ = _build_coordinator()
         sensor = DestinationCurrentTargetSensor(coord, coord.entry, _make_device_info())
-        assert not hasattr(sensor, "_attr_entity_category") or sensor._attr_entity_category is None
+        assert (
+            not hasattr(sensor, "_attr_entity_category")
+            or sensor._attr_entity_category is None
+        )
 
     def test_status_is_diagnostic(self):
         """StatusSensor should have entity_category set to DIAGNOSTIC."""
         coord, _ = _build_coordinator()
         sensor = StatusSensor(coord, coord.entry, _make_device_info())
         assert sensor._attr_entity_category is not None
+
+
+class TestDemandBinarySensors:
+    """Verify the all-source and primary demand entities."""
+
+    def test_all_source_demand_state_and_context(self):
+        coord, _ = _build_coordinator(
+            source_entities=["climate.primary", "climate.secondary"]
+        )
+        coord._primary_source_entities = ["climate.primary"]
+        coord.demand_active = True
+        coord.delta_max = 0.7
+        coord.leading_room = "climate.secondary"
+        coord.usable_source_count = 2
+
+        entity = HeatingDemandActiveBinarySensor(
+            coord, coord.entry, _make_device_info()
+        )
+
+        assert entity.is_on is True
+        assert entity.available is True
+        assert entity._attr_name == "Heating Demand Active"
+        assert entity._attr_unique_id == "test_entry_123_heating_demand_active"
+        assert entity.extra_state_attributes["scope"] == "all_sources"
+        assert entity.extra_state_attributes["leading_source"] == "climate.secondary"
+
+    def test_primary_demand_has_independent_state_and_scope(self):
+        coord, _ = _build_coordinator(
+            source_entities=["climate.primary", "climate.secondary"]
+        )
+        coord._primary_source_entities = ["climate.primary"]
+        coord.demand_active = True
+        coord.primary_demand_active = False
+        coord.primary_delta_max = 0.2
+        coord.primary_leading_room = "climate.primary"
+        coord.primary_usable_source_count = 1
+
+        entity = PrimaryHeatingDemandActiveBinarySensor(
+            coord, coord.entry, _make_device_info()
+        )
+
+        assert entity.is_on is False
+        assert entity.available is True
+        assert entity._attr_name == "Primary Heating Demand Active"
+        assert entity._attr_unique_id == "test_entry_123_primary_heating_demand_active"
+        assert entity.extra_state_attributes["scope"] == "primary_sources"
+        assert entity.extra_state_attributes["source_entities"] == ["climate.primary"]
+
+    def test_primary_demand_unavailable_without_usable_primary_source(self):
+        coord, _ = _build_coordinator()
+        coord.primary_usable_source_count = 0
+        entity = PrimaryHeatingDemandActiveBinarySensor(
+            coord, coord.entry, _make_device_info()
+        )
+
+        assert entity.available is False
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +305,16 @@ class TestSensorNaming:
     def test_room_delta_name_starts_with_delta(self):
         """RoomDeltaSensor name should start with 'Delta'."""
         coord, _ = _build_coordinator()
-        sensor = RoomDeltaSensor(coord, coord.entry, "climate.living_room", _make_device_info())
+        sensor = RoomDeltaSensor(
+            coord, coord.entry, "climate.living_room", _make_device_info()
+        )
         assert sensor._attr_name.startswith("Delta ")
 
     def test_sort_order_is_correct(self):
         """Names should sort in the order: setpoint, delta max, then room deltas."""
-        coord, _ = _build_coordinator(source_entities=["climate.room1", "climate.room2"])
+        coord, _ = _build_coordinator(
+            source_entities=["climate.room1", "climate.room2"]
+        )
         di = _make_device_info()
 
         setpoint = DestinationSetpointSensor(coord, coord.entry, di)
@@ -225,7 +322,12 @@ class TestSensorNaming:
         room1 = RoomDeltaSensor(coord, coord.entry, "climate.room1", di)
         room2 = RoomDeltaSensor(coord, coord.entry, "climate.room2", di)
 
-        names = [setpoint._attr_name, max_delta._attr_name, room1._attr_name, room2._attr_name]
+        names = [
+            setpoint._attr_name,
+            max_delta._attr_name,
+            room1._attr_name,
+            room2._attr_name,
+        ]
         assert names == sorted(names)
 
 
@@ -258,8 +360,7 @@ class TestSetpointDiagnostics:
         assert attrs["destination_target"] == DEFAULT_DESTINATION_TARGET
         assert attrs["demand_active"] is False
         assert (
-            attrs["demand_activation_threshold"]
-            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+            attrs["demand_activation_threshold"] == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
         )
         assert (
             attrs["demand_deactivation_threshold"]
@@ -279,8 +380,7 @@ class TestSetpointDiagnostics:
 
         assert attrs["demand_active"] is True
         assert (
-            attrs["demand_activation_threshold"]
-            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+            attrs["demand_activation_threshold"] == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
         )
         assert (
             attrs["demand_deactivation_threshold"]
@@ -311,8 +411,7 @@ class TestSetpointDiagnostics:
         assert attrs["destination_target"] == DEFAULT_DESTINATION_TARGET
         assert attrs["demand_active"] is False
         assert (
-            attrs["demand_activation_threshold"]
-            == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
+            attrs["demand_activation_threshold"] == DEFAULT_DEMAND_ACTIVATION_THRESHOLD
         )
         assert (
             attrs["demand_deactivation_threshold"]
@@ -345,7 +444,9 @@ class TestSetpointDiagnostics:
         coord.rounded_setpoint = None
         coord.computed_setpoint = 19.5
 
-        setpoint_sensor = DestinationSetpointSensor(coord, coord.entry, _make_device_info())
+        setpoint_sensor = DestinationSetpointSensor(
+            coord, coord.entry, _make_device_info()
+        )
         status_sensor = StatusSensor(coord, coord.entry, _make_device_info())
 
         assert setpoint_sensor.extra_state_attributes["rounded_setpoint"] == 19.5

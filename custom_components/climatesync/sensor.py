@@ -1,4 +1,5 @@
 """Sensor platform for ClimateSync."""
+
 from __future__ import annotations
 
 import hashlib  # noqa: S324 – used for non-cryptographic unique_id generation only
@@ -61,14 +62,10 @@ async def async_setup_entry(
 
     # Per-room delta sensors
     for source in coordinator.source_entities:
-        entities.append(
-            RoomDeltaSensor(coordinator, entry, source, device_info)
-        )
+        entities.append(RoomDeltaSensor(coordinator, entry, source, device_info))
 
     # Destination current target sensor
-    entities.append(
-        DestinationCurrentTargetSensor(coordinator, entry, device_info)
-    )
+    entities.append(DestinationCurrentTargetSensor(coordinator, entry, device_info))
 
     # Status sensor (diagnostic)
     entities.append(StatusSensor(coordinator, entry, device_info))
@@ -188,6 +185,10 @@ class MaxDeltaSensor(_ClimateSyncBaseSensor):
             "demand_active": self._coordinator.demand_active,
             "demand_activation_threshold": self._coordinator.demand_activation_threshold,
             "demand_deactivation_threshold": self._coordinator.demand_deactivation_threshold,
+            "primary_delta_max": round(self._coordinator.primary_delta_max, 2),
+            "primary_leading_room": self._coordinator.primary_leading_room,
+            "primary_demand_active": self._coordinator.primary_demand_active,
+            "primary_source_entities": list(self._coordinator.primary_source_entities),
             "usable_source_count": self._coordinator.usable_source_count,
             "degraded_source_entities": list(
                 self._coordinator.degraded_source_entities
@@ -324,6 +325,14 @@ class StatusSensor(_ClimateSyncBaseSensor):
             "demand_active": coord.demand_active,
             "demand_activation_threshold": coord.demand_activation_threshold,
             "demand_deactivation_threshold": coord.demand_deactivation_threshold,
+            "primary_delta_max": round(coord.primary_delta_max, 2),
+            "primary_leading_room": coord.primary_leading_room,
+            "primary_demand_active": coord.primary_demand_active,
+            "primary_source_entities": list(coord.primary_source_entities),
+            "primary_usable_source_count": coord.primary_usable_source_count,
+            "primary_degraded_source_entities": list(
+                coord.primary_degraded_source_entities
+            ),
             "rounding_mode": coord.rounding_mode,
             "rounding_direction": coord.rounding_direction,
             "raw_setpoint": coord.raw_setpoint,
