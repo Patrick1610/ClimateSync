@@ -5,6 +5,13 @@
 
 > **Developed with Plugwise Emma in mind. Source climates expose `current_temperature` and `temperature`; destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.2.7
+
+This release adds a downloadable Home Assistant diagnostics file. It captures
+the configured source and destination roles, current source health and deltas,
+demand state, setpoint calculation, timestamps, counters, and the latest error.
+It contains no credentials and does not change ClimateSync's control behaviour.
+
 ## Release 1.2.6
 
 This release adds two first-class heating-demand binary sensors. **Heating
@@ -65,7 +72,7 @@ Even without an Emma, this delta-based method is more accurate than copying setp
 - All-source and primary-source heating-demand binary sensors, both driven by the configured hysteresis.
 - Destination target selection: ordinary `temperature` (default) or heating-range `target_temp_low`.
 - Rate limiting: maximum one service call per 10 seconds (configurable).
-- Rich diagnostic sensors including a `sensor.climatesync_status` that makes desyncs visible.
+- Rich diagnostic sensors plus a downloadable diagnostics file for support and troubleshooting.
 - **No controllable entities** — all control is internal via `climate.set_temperature`.
 
 ---
@@ -247,7 +254,7 @@ For Plugwise Emma, `0.5 steps` can be useful because Emma commonly accepts half-
 
 ## Entities
 
-All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas, destination target) are regular entities; the status sensor is classified as *diagnostic*.
+All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas, destination target) are regular entities; the status sensor is classified as *diagnostic*. Home Assistant can also download a diagnostics file from the integration or device page.
 
 ### Binary sensors
 

@@ -841,6 +841,21 @@ class ClimateSyncCoordinator:
         return self._rounding_direction
 
     @property
+    def resync_interval(self) -> int:
+        """Return the periodic resync interval in seconds."""
+        return self._resync_interval
+
+    @property
+    def min_change_threshold(self) -> float:
+        """Return the destination anti-flap threshold."""
+        return self._min_change_threshold
+
+    @property
+    def min_send_interval(self) -> int:
+        """Return the minimum interval between destination writes."""
+        return self._min_send_interval
+
+    @property
     def destination_target(self) -> str:
         """Return the configured destination target attribute."""
         return self._destination_target
