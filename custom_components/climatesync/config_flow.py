@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import voluptuous as vol
@@ -75,10 +76,25 @@ def _sources_schema(
 
 
 def _primary_sources_schema(
-    sources: list[str], default_sources: list[str] | None = None
+    sources: list[str], default_sources: list[str] | None = None, *, hass=None
 ) -> vol.Schema:
-    """Return a selector limited to both source types chosen in step 1."""
+    """Limit to chosen sources; display HA names with ID fallback/disambiguation."""
     defaults = [source for source in (default_sources or []) if source in sources]
+    labels = {}
+    for source in sources:
+        state = hass.states.get(source) if hass is not None else None
+        name = getattr(state, "name", None)
+        labels[source] = name if isinstance(name, str) and name.strip() else source
+    counts = Counter(labels.values())
+    options = [
+        {
+            "value": source,
+            "label": f"{labels[source]} ({source})"
+            if counts[labels[source]] > 1
+            else labels[source],
+        }
+        for source in sources
+    ]
     return vol.Schema(
         {
             vol.Required(
@@ -89,9 +105,7 @@ def _primary_sources_schema(
                     "select": {
                         "multiple": True,
                         "mode": "list",
-                        "options": [
-                            {"value": source, "label": source} for source in sources
-                        ],
+                        "options": options,
                     }
                 }
             ),
@@ -370,7 +384,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="primary_sources",
             data_schema=_primary_sources_schema(
-                all_sources, all_sources
+                all_sources, all_sources, hass=self.hass
             ),
             errors=errors,
             last_step=False,
@@ -542,7 +556,9 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="primary_sources",
-            data_schema=_primary_sources_schema(all_sources, current_primary),
+            data_schema=_primary_sources_schema(
+                all_sources, current_primary, hass=self.hass
+            ),
             errors=errors,
             last_step=False,
         )

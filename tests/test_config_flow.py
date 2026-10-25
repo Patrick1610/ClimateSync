@@ -189,6 +189,65 @@ def test_source_selectors_have_separate_domains(flow_module):
     assert domains == {"source_entities": "climate", "delta_source_entities": "sensor"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [False, True])
+async def test_primary_labels_use_names_without_changing_values(flow_module, options):
+    sources = ["climate.room", "sensor.pi_delta", "sensor.missing"]
+    flow = _flow(flow_module, options)
+    flow.hass.states.get.side_effect = lambda entity: {
+        "climate.room": SimpleNamespace(name="Living room radiator"),
+        "sensor.pi_delta": SimpleNamespace(name="Hallway PI delta"),
+    }.get(entity)
+    first = flow.async_step_init if options else flow.async_step_user
+    await first({"source_entities": sources[:1], "delta_source_entities": sources[1:]})
+    result = await flow.async_step_primary_sources()
+    schema = result["data_schema"].schema
+    selector = next(iter(schema.values())).config["select"]
+    assert selector["mode"] == "list"
+    assert selector["options"] == [
+        {"value": sources[0], "label": "Living room radiator"},
+        {"value": sources[1], "label": "Hallway PI delta"},
+        {"value": sources[2], "label": sources[2]},
+    ]
+
+
+def test_primary_duplicate_and_empty_names_have_unambiguous_fallback(flow_module):
+    hass = MagicMock()
+    names = {"climate.a": "Room", "sensor.b": "Room", "sensor.c": " "}
+    hass.states.get.side_effect = lambda entity: SimpleNamespace(name=names[entity])
+    schema = flow_module._primary_sources_schema(
+        list(names), ["sensor.b"], hass=hass
+    ).schema
+    assert next(iter(schema)).default() == ["sensor.b"]
+    assert next(iter(schema.values())).config["select"]["options"] == [
+        {"value": "climate.a", "label": "Room (climate.a)"},
+        {"value": "sensor.b", "label": "Room (sensor.b)"},
+        {"value": "sensor.c", "label": "sensor.c"},
+    ]
+
+
+def test_primary_without_hass_keeps_id_labels_and_selected_values(flow_module):
+    sources = ["climate.a", "sensor.b"]
+    schema = flow_module._primary_sources_schema(sources, ["sensor.b"]).schema
+    assert next(iter(schema)).default() == ["sensor.b"]
+    assert next(iter(schema.values())).config["select"]["options"] == [
+        {"value": source, "label": source} for source in sources
+    ]
+
+
+def test_renaming_a_primary_source_does_not_change_selection(flow_module):
+    hass = MagicMock()
+    for name in ("Old name", "New name"):
+        hass.states.get.return_value = SimpleNamespace(name=name)
+        schema = flow_module._primary_sources_schema(
+            ["sensor.b"], ["sensor.b"], hass=hass
+        ).schema
+        assert next(iter(schema)).default() == ["sensor.b"]
+        assert next(iter(schema.values())).config["select"]["options"] == [
+            {"value": "sensor.b", "label": name}
+        ]
+
+
 @pytest.mark.parametrize("language", ["en", "nl"])
 def test_setup_and_options_describe_delta_input_contract(language):
     path = (

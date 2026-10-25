@@ -140,6 +140,12 @@ calculated output sensors as inputs, which would create a feedback loop.
 
 ### Step 2 — Primary sources
 
+The primary-source checkboxes show Home Assistant display names while retaining
+entity IDs internally. Missing names fall back to the entity ID; duplicate names
+include the ID for disambiguation. Opening or saving the wizard does not change
+source identities or their existing primary/secondary role just because labels
+changed. This applies to both climate and delta-sensor sources.
+
 Select the subset of sources (climates and/or delta sensors) that may enable other rooms to piggyback on
 an existing heating run. General destination control still uses **all** sources.
 A secondary room can therefore start heating when it falls below its own target,
