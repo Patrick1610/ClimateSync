@@ -16,6 +16,7 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_DELTA_SOURCE_ENTITIES,
     CONF_DEMAND_ACTIVATION_THRESHOLD,
     CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
@@ -156,6 +157,7 @@ class ClimateSyncCoordinator:
 
         # Resolved config / options
         self._source_entities: list[str] = []
+        self._delta_source_entities: list[str] = []
         self._primary_source_entities: list[str] = []
         self._destination_entity: str = ""
         self._destination_target: str = DEFAULT_DESTINATION_TARGET
@@ -234,6 +236,15 @@ class ClimateSyncCoordinator:
 
         self._source_entities = list(
             opts.get(CONF_SOURCE_ENTITIES, data.get(CONF_SOURCE_ENTITIES, []))
+        )
+        self._delta_source_entities = list(
+            opts.get(
+                CONF_DELTA_SOURCE_ENTITIES,
+                data.get(CONF_DELTA_SOURCE_ENTITIES, []),
+            )
+        )
+        self._source_entities = list(
+            dict.fromkeys(self._source_entities + self._delta_source_entities)
         )
         configured_primary_sources = list(
             opts.get(
@@ -357,6 +368,13 @@ class ClimateSyncCoordinator:
         for attr in _ATTRS:
             if old_attrs.get(attr) != new_attrs.get(attr):
                 return True
+
+        # A delta sensor's unit is part of its input contract. Re-evaluate a
+        # unit failure/recovery even when the numeric state is unchanged.
+        if event.data.get("entity_id", "").startswith("sensor."):
+            return old_attrs.get("unit_of_measurement") != new_attrs.get(
+                "unit_of_measurement"
+            )
 
         return False
 
@@ -483,25 +501,42 @@ class ClimateSyncCoordinator:
                 _LOGGER.debug("ClimateSync: source %s unavailable", entity_id)
                 continue
 
-            current = _safe_float(state.attributes.get("current_temperature"))
-            target = _safe_float(state.attributes.get("temperature"))
-
-            if state.state == "off" and current is not None:
-                self.usable_source_count += 1
-                self.inactive_source_entities.append(entity_id)
-                raw_delta = 0.0
-                effective_raw_delta = 0.0
-                source_status = "inactive_off"
-            elif current is None or target is None:
-                self.degraded_source_entities.append(entity_id)
-                raw_delta = 0.0
-                effective_raw_delta = 0.0
-                source_status = "missing_temperature"
+            if entity_id in self._delta_source_entities:
+                # Explicit delta input, not a room temperature or a percentage.
+                current = target = None
+                value = _safe_float(state.state)
+                if state.attributes.get("unit_of_measurement") != "°C":
+                    source_status = "invalid_delta_unit"
+                elif value is None or not math.isfinite(value):
+                    source_status = "invalid_delta"
+                else:
+                    source_status = "active"
+                if source_status == "active":
+                    self.usable_source_count += 1
+                    raw_delta = effective_raw_delta = value
+                else:
+                    self.degraded_source_entities.append(entity_id)
+                    raw_delta = effective_raw_delta = 0.0
             else:
-                self.usable_source_count += 1
-                raw_delta = target - current
-                effective_raw_delta = raw_delta
-                source_status = "active"
+                current = _safe_float(state.attributes.get("current_temperature"))
+                target = _safe_float(state.attributes.get("temperature"))
+
+                if state.state == "off" and current is not None:
+                    self.usable_source_count += 1
+                    self.inactive_source_entities.append(entity_id)
+                    raw_delta = 0.0
+                    effective_raw_delta = 0.0
+                    source_status = "inactive_off"
+                elif current is None or target is None:
+                    self.degraded_source_entities.append(entity_id)
+                    raw_delta = 0.0
+                    effective_raw_delta = 0.0
+                    source_status = "missing_temperature"
+                else:
+                    self.usable_source_count += 1
+                    raw_delta = target - current
+                    effective_raw_delta = raw_delta
+                    source_status = "active"
 
             delta = max(effective_raw_delta, 0.0)
 
@@ -541,7 +576,8 @@ class ClimateSyncCoordinator:
         self.primary_degraded_source_entities = [
             entity_id
             for entity_id, row in primary_rows.items()
-            if row["source_status"] in ("unavailable", "missing_temperature")
+            if row["source_status"]
+            in ("unavailable", "missing_temperature", "invalid_delta", "invalid_delta_unit")
         ]
         self.primary_inactive_source_entities = [
             entity_id
@@ -809,6 +845,11 @@ class ClimateSyncCoordinator:
     def source_entities(self) -> list[str]:
         """Return source entity ids."""
         return self._source_entities
+
+    @property
+    def delta_source_entities(self) -> list[str]:
+        """Return the explicitly configured numerical delta inputs."""
+        return self._delta_source_entities
 
     @property
     def primary_source_entities(self) -> list[str]:

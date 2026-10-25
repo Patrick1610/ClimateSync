@@ -41,6 +41,7 @@ async def test_config_entry_diagnostics_are_complete_and_serialisable() -> None:
     coordinator = SimpleNamespace(
         status="degraded_source_data",
         source_entities=["climate.living_room", "climate.hallway"],
+        delta_source_entities=[],
         primary_source_entities=["climate.living_room"],
         destination_entity="climate.emma",
         destination_target="target_temp_low",
@@ -112,6 +113,7 @@ async def test_config_entry_diagnostics_are_complete_and_serialisable() -> None:
     diagnostics = result["coordinator"]
     assert diagnostics["configuration"]["destination_entity"] == "climate.emma"
     assert diagnostics["configuration"]["resync_interval_seconds"] == 60
+    assert diagnostics["configuration"]["delta_source_entities"] == []
     assert diagnostics["sources"]["demand_active"] is True
     assert diagnostics["sources"]["degraded_source_entities"] == ["climate.hallway"]
     assert diagnostics["primary_sources"]["demand_active"] is True

@@ -3,16 +3,17 @@
     "step": {
       "user": {
         "title": "ClimateSync – Stap 1 van 4: Warmtebronnen",
-        "description": "Selecteer alle kamerthermostaten waarvan het temperatuurverschil de bestemming mag aansturen. De entiteit **Warmtevraag actief** gebruikt al deze bronnen. Een bron moet een actuele temperatuur en doeltemperatuur aanbieden; een uitgeschakelde bron met geldige actuele temperatuur telt als nul vraag.",
+        "description": "Kies climate-bronnen, delta-sensoren of een combinatie. Climates leveren doel minus actuele temperatuur; delta-sensoren leveren een al berekend warmtevraagverschil in **°C**, geen kamertemperatuur of percentage. De hoogste positieve delta stuurt de bestemming aan, nooit de som. Ontbrekende of ongeldige bronnen tellen als **0**; gezonde bronnen blijven werken. Selecteer over beide velden samen minimaal één bron. Stap je voor een kamer over op een delta-sensor, verwijder dan de oude climate-bronnen van die kamer zodat die niet blijven overheersen. Bestaande selecties blijven behouden totdat je ze zelf wijzigt.",
         "data": {
-          "source_entities": "Bron-klimaatentiteiten"
+          "source_entities": "Bron-klimaatentiteiten",
+          "delta_source_entities": "Warmtevraagdelta-sensoren (°C)"
         }
       },
       "primary_sources": {
         "title": "ClimateSync – Stap 2 van 4: Primaire bronnen",
         "description": "Selecteer de kamers die andere kamers mogen laten meeliften op een bestaande verwarmingsronde. **Primaire warmtevraag actief** gebruikt alleen deze selectie en dezelfde hysterese als de algemene vraag. Een secundaire bron kan nog steeds algemene verwarming starten als hij onder zijn eigen doel komt, maar activeert de primaire-vraagentiteit niet.",
         "data": {
-          "primary_source_entities": "Primaire bron-klimaatentiteiten"
+          "primary_source_entities": "Primaire bronnen (climates en delta-sensoren)"
         }
       },
       "destination": {
@@ -40,7 +41,7 @@
       }
     },
     "error": {
-      "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_sources": "Selecteer ten minste één climate-bron of delta-sensor.",
       "no_primary_sources": "Selecteer ten minste één primaire bron.",
       "primary_not_source": "Elke primaire bron moet ook als algemene bron geselecteerd zijn.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",
@@ -53,16 +54,17 @@
     "step": {
       "init": {
         "title": "ClimateSync – Stap 1 van 4: Warmtebronnen",
-        "description": "Selecteer alle kamerthermostaten waarvan het temperatuurverschil de bestemming mag aansturen. De entiteit **Warmtevraag actief** gebruikt al deze bronnen. Een verwijderde bron verdwijnt ook uit de beschikbare primaire selectie.",
+        "description": "Kies climate-bronnen, delta-sensoren of een combinatie. Climates leveren doel minus actuele temperatuur; delta-sensoren leveren een al berekend warmtevraagverschil in **°C**, geen kamertemperatuur of percentage. De hoogste positieve delta stuurt de bestemming aan, nooit de som. Ontbrekende of ongeldige bronnen tellen als **0**; gezonde bronnen blijven werken. Selecteer over beide velden samen minimaal één bron. Stap je voor een kamer over op een delta-sensor, verwijder dan de oude climate-bronnen van die kamer zodat die niet blijven overheersen. Een verwijderde bron verdwijnt ook uit de beschikbare primaire selectie. Kamers schakelen niet automatisch over.",
         "data": {
-          "source_entities": "Bron-klimaatentiteiten"
+          "source_entities": "Bron-klimaatentiteiten",
+          "delta_source_entities": "Warmtevraagdelta-sensoren (°C)"
         }
       },
       "primary_sources": {
         "title": "ClimateSync – Stap 2 van 4: Primaire bronnen",
         "description": "Selecteer de kamers die andere kamers mogen laten meeliften op een bestaande verwarmingsronde. **Primaire warmtevraag actief** gebruikt alleen deze selectie en dezelfde hysterese als de algemene vraag. Secundaire bronnen tellen wel mee voor algemene vraag, maar nooit voor primaire vraag.",
         "data": {
-          "primary_source_entities": "Primaire bron-klimaatentiteiten"
+          "primary_source_entities": "Primaire bronnen (climates en delta-sensoren)"
         }
       },
       "destination": {
@@ -90,7 +92,7 @@
       }
     },
     "error": {
-      "no_sources": "Selecteer ten minste één bron-klimaatentiteit.",
+      "no_sources": "Selecteer ten minste één climate-bron of delta-sensor.",
       "no_primary_sources": "Selecteer ten minste één primaire bron.",
       "primary_not_source": "Elke primaire bron moet ook als algemene bron geselecteerd zijn.",
       "no_destination": "Selecteer een bestemmings-thermostaat.",

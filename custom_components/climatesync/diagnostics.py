@@ -27,6 +27,7 @@ def _coordinator_diagnostics(
         "status": coordinator.status,
         "configuration": {
             "source_entities": list(coordinator.source_entities),
+            "delta_source_entities": list(coordinator.delta_source_entities),
             "primary_source_entities": list(coordinator.primary_source_entities),
             "destination_entity": coordinator.destination_entity,
             "destination_target": coordinator.destination_target,

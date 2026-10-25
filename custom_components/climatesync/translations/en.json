@@ -3,16 +3,17 @@
     "step": {
       "user": {
         "title": "ClimateSync – Step 1 of 4: Heating sources",
-        "description": "Select every room thermostat whose heating gap may control the destination. The **Heating Demand Active** entity uses all of these sources. A source must expose a current temperature and target temperature; an `off` source with a valid current temperature contributes zero demand.",
+        "description": "Choose climate sources, delta sensors, or a mixture. Climates contribute target minus current temperature; delta sensors supply an already calculated heating gap in **°C**, not a room temperature or a percentage. The highest positive delta controls the destination, never the sum. Missing or invalid sources contribute **0** while healthy sources continue. Select at least one source across both fields. When moving a room to a delta sensor, remove its old climate sources so they cannot overrule it. Existing selections stay unchanged until you edit them.",
         "data": {
-          "source_entities": "Source climate entities"
+          "source_entities": "Source climate entities",
+          "delta_source_entities": "Heating-demand delta sensors (°C)"
         }
       },
       "primary_sources": {
         "title": "ClimateSync – Step 2 of 4: Primary sources",
         "description": "Select the rooms that may enable other rooms to piggyback on an existing heating run. The **Primary Heating Demand Active** entity uses only this subset and the same hysteresis as general demand. A secondary source can still start general heating when it is below its own target, but it will not activate the primary-demand entity.",
         "data": {
-          "primary_source_entities": "Primary source climate entities"
+          "primary_source_entities": "Primary sources (climates and delta sensors)"
         }
       },
       "destination": {
@@ -40,7 +41,7 @@
       }
     },
     "error": {
-      "no_sources": "Please select at least one source climate entity.",
+      "no_sources": "Please select at least one climate source or delta sensor.",
       "no_primary_sources": "Please select at least one primary source.",
       "primary_not_source": "Every primary source must also be selected as a general source.",
       "no_destination": "Please select a destination thermostat.",
@@ -53,16 +54,17 @@
     "step": {
       "init": {
         "title": "ClimateSync – Step 1 of 4: Heating sources",
-        "description": "Select every room thermostat whose heating gap may control the destination. The **Heating Demand Active** entity uses all of these sources. Removing a source also removes it from the selectable primary subset.",
+        "description": "Choose climate sources, delta sensors, or a mixture. Climates contribute target minus current temperature; delta sensors supply an already calculated heating gap in **°C**, not a room temperature or a percentage. The highest positive delta controls the destination, never the sum. Missing or invalid sources contribute **0** while healthy sources continue. Select at least one source across both fields. When moving a room to a delta sensor, remove its old climate sources so they cannot overrule it. Removing a source also removes it from the selectable primary subset. No room switches automatically.",
         "data": {
-          "source_entities": "Source climate entities"
+          "source_entities": "Source climate entities",
+          "delta_source_entities": "Heating-demand delta sensors (°C)"
         }
       },
       "primary_sources": {
         "title": "ClimateSync – Step 2 of 4: Primary sources",
         "description": "Select the rooms that may enable other rooms to piggyback on an existing heating run. The **Primary Heating Demand Active** entity uses only this subset and the same hysteresis as general demand. Secondary sources still contribute to general demand but never to primary demand.",
         "data": {
-          "primary_source_entities": "Primary source climate entities"
+          "primary_source_entities": "Primary sources (climates and delta sensors)"
         }
       },
       "destination": {
@@ -90,7 +92,7 @@
       }
     },
     "error": {
-      "no_sources": "Please select at least one source climate entity.",
+      "no_sources": "Please select at least one climate source or delta sensor.",
       "no_primary_sources": "Please select at least one primary source.",
       "primary_not_source": "Every primary source must also be selected as a general source.",
       "no_destination": "Please select a destination thermostat.",

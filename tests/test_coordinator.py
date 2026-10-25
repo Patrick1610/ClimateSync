@@ -39,6 +39,7 @@ for mod_name, mod_obj in _modules.items():
 
 # Now safe to import our code
 from custom_components.climatesync.const import (  # noqa: E402
+    CONF_DELTA_SOURCE_ENTITIES,
     CONF_DEMAND_ACTIVATION_THRESHOLD,
     CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
@@ -115,6 +116,7 @@ def _make_state(
 def _build_coordinator(
     *,
     source_entities: list[str] | None = None,
+    delta_source_entities: list[str] | None = None,
     primary_source_entities: list[str] | None = None,
     destination_entity: str = "climate.dest",
     idle_temperature: float = DEFAULT_IDLE_TEMPERATURE,
@@ -131,8 +133,9 @@ def _build_coordinator(
     """Build a coordinator with a fully-mocked hass/entry, return (coordinator, hass)."""
     if source_entities is None:
         source_entities = ["climate.room1"]
+    all_sources = source_entities + (delta_source_entities or [])
     if primary_source_entities is None:
-        primary_source_entities = list(source_entities)
+        primary_source_entities = list(all_sources)
 
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
@@ -155,12 +158,15 @@ def _build_coordinator(
         CONF_DEMAND_ACTIVATION_THRESHOLD: demand_activation_threshold,
         CONF_DEMAND_DEACTIVATION_THRESHOLD: demand_deactivation_threshold,
     }
+    if delta_source_entities is not None:
+        entry.data[CONF_DELTA_SOURCE_ENTITIES] = list(delta_source_entities)
     if rounding_direction is not None:
         entry.options[CONF_ROUNDING_DIRECTION] = rounding_direction
 
     coord = ClimateSyncCoordinator(hass, entry)
     # Apply config without setting up real HA listeners
-    coord._source_entities = list(source_entities)
+    coord._source_entities = list(all_sources)
+    coord._delta_source_entities = list(delta_source_entities or [])
     coord._primary_source_entities = list(primary_source_entities)
     coord._destination_entity = destination_entity
     coord._destination_target = destination_target
@@ -181,6 +187,158 @@ def _build_coordinator(
 def _configure_states(hass: MagicMock, states: dict[str, MagicMock]) -> None:
     """Set ``hass.states.get`` to return per-entity mock states."""
     hass.states.get = lambda eid: states.get(eid)
+
+
+def _delta_state(value: str, unit: str | None = "°C") -> MagicMock:
+    state = MagicMock()
+    state.state = value
+    state.attributes = {"unit_of_measurement": unit}
+    return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sensor_delta", ["0.2", "0.45", "0.8", "6.208"])
+async def test_mixed_sources_use_maximum_not_sum(sensor_delta):
+    coord, hass = _build_coordinator(
+        delta_source_entities=["sensor.pi_delta"], rounding_mode=ROUNDING_MODE_2DEC
+    )
+    _configure_states(hass, {
+        "climate.room1": _make_state(19.6, 20.0),
+        "sensor.pi_delta": _delta_state(sensor_delta),
+        "climate.dest": _make_state(20.0, 5.0),
+    })
+    await coord._async_evaluate()
+    expected = max(0.4, float(sensor_delta))
+    assert coord.delta_max == pytest.approx(expected)
+    assert coord.raw_setpoint == pytest.approx(20 + expected)
+    assert coord.leading_room == ("sensor.pi_delta" if float(sensor_delta) > 0.4 else "climate.room1")
+    assert coord.usable_source_count == 2
+    assert coord.room_deltas["sensor.pi_delta"]["current"] is None
+    assert coord.room_deltas["sensor.pi_delta"]["target"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [None, "unknown", "unavailable", "", "oops", "nan", "inf", "-inf"])
+async def test_bad_delta_contributes_zero_without_blocking_climate(value):
+    coord, hass = _build_coordinator(delta_source_entities=["sensor.pi_delta"])
+    _configure_states(hass, {
+        "climate.room1": _make_state(19.0, 20.0),
+        "sensor.pi_delta": None if value is None else _delta_state(value),
+        "climate.dest": _make_state(20.0, 5.0),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == 1.0
+    assert coord.raw_setpoint == 21.0
+    assert coord.room_deltas["sensor.pi_delta"]["delta"] == 0
+    assert coord.degraded_source_entities == ["sensor.pi_delta"]
+    assert coord.status == STATUS_DEGRADED_SOURCE_DATA
+    assert coord.demand_active is True
+    assert hass.services.async_call.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unit", [None, "%", "°F", "K"])
+async def test_wrong_delta_unit_is_zero_not_room_temperature_or_percentage(unit):
+    coord, hass = _build_coordinator(delta_source_entities=["sensor.pi_delta"])
+    _configure_states(hass, {
+        "climate.room1": _make_state(19.0, 20.0),
+        "sensor.pi_delta": _delta_state("90", unit),
+        "climate.dest": _make_state(20.0, 5.0),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == 1
+    assert coord.room_deltas["sensor.pi_delta"]["source_status"] == "invalid_delta_unit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value, expected", [("0", 0), ("-0.5", 0), ("0.45", 0.45)])
+async def test_sensor_only_configuration_accepts_zero_and_clamps_negative(value, expected):
+    coord, hass = _build_coordinator(
+        source_entities=[], delta_source_entities=["sensor.pi_delta"]
+    )
+    _configure_states(hass, {
+        "sensor.pi_delta": _delta_state(value),
+        "climate.dest": _make_state(20.0, 21.0),
+    })
+    await coord._async_evaluate()
+    assert coord.delta_max == expected
+    assert coord.usable_source_count == 1
+    assert coord.degraded_source_entities == []
+    assert coord.raw_setpoint == (20 + expected if expected else coord.idle_temperature)
+
+
+@pytest.mark.asyncio
+async def test_missing_climate_does_not_block_sensor_and_all_missing_withdraws_demand():
+    coord, hass = _build_coordinator(delta_source_entities=["sensor.pi_delta"])
+    states = {
+        "sensor.pi_delta": _delta_state("0.6"),
+        "climate.dest": _make_state(20.0, 20.6),
+    }
+    _configure_states(hass, states)
+    await coord._async_evaluate()
+    assert coord.delta_max == 0.6
+    assert coord.demand_active
+    states.clear()
+    states["climate.dest"] = _make_state(20.0, 20.6)
+    await coord._async_evaluate()
+    assert coord.delta_max == 0
+    assert not coord.demand_active
+    assert coord.computed_setpoint == coord.idle_temperature
+    assert coord.status == STATUS_MISSING_SOURCE_DATA
+
+
+@pytest.mark.asyncio
+async def test_delta_sensor_primary_scope_and_existing_hysteresis():
+    coord, hass = _build_coordinator(
+        delta_source_entities=["sensor.pi_delta"],
+        primary_source_entities=["sensor.pi_delta"],
+        demand_activation_threshold=0.1,
+        demand_deactivation_threshold=0.0,
+    )
+    states = {
+        "climate.room1": _make_state(19.0, 20.0),
+        "climate.dest": _make_state(20.0, 21.0),
+    }
+    _configure_states(hass, states)
+    for value, primary_active in [("0.09", False), ("0.1", True), ("0.05", True), ("0", False), ("nan", False)]:
+        states["sensor.pi_delta"] = _delta_state(value)
+        await coord._async_evaluate()
+        assert coord.demand_active is True
+        assert coord.primary_demand_active is primary_active
+    assert coord.primary_degraded_source_entities == ["sensor.pi_delta"]
+
+
+def test_apply_options_preserves_legacy_selection_and_watches_mixed_sources():
+    coord, _ = _build_coordinator(primary_source_entities=["climate.room1"])
+    coord.async_apply_options()
+    assert coord.source_entities == ["climate.room1"]
+    assert coord.delta_source_entities == []
+    assert coord.primary_source_entities == ["climate.room1"]
+    assert CONF_DELTA_SOURCE_ENTITIES not in coord.entry.data
+    coord.entry.options[CONF_DELTA_SOURCE_ENTITIES] = ["sensor.pi_delta"]
+    coord.entry.options[CONF_PRIMARY_SOURCE_ENTITIES] = ["sensor.pi_delta"]
+    with patch("custom_components.climatesync.coordinator.async_track_state_change_event") as track:
+        coord.async_apply_options()
+    assert coord.source_entities == ["climate.room1", "sensor.pi_delta"]
+    assert coord.delta_source_entities == ["sensor.pi_delta"]
+    assert coord.primary_source_entities == ["sensor.pi_delta"]
+    assert track.call_args.args[1] == ["climate.room1", "sensor.pi_delta", "climate.dest"]
+
+
+def test_numeric_sensor_state_change_is_relevant():
+    event = MagicMock()
+    event.data = {"old_state": _delta_state("0.1"), "new_state": _delta_state("0.2")}
+    assert ClimateSyncCoordinator._has_relevant_change(event)
+
+
+def test_delta_sensor_unit_change_is_relevant_without_numeric_change():
+    event = MagicMock()
+    event.data = {
+        "entity_id": "sensor.pi_delta",
+        "old_state": _delta_state("0.6", "%"),
+        "new_state": _delta_state("0.6", "°C"),
+    }
+    assert ClimateSyncCoordinator._has_relevant_change(event)
 
 
 # ---------------------------------------------------------------------------

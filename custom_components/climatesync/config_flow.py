@@ -11,6 +11,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_DELTA_SOURCE_ENTITIES,
     CONF_DEMAND_ACTIVATION_THRESHOLD,
     CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
@@ -48,10 +49,13 @@ from .const import (
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _sources_schema(default_sources: list[str] | None = None) -> vol.Schema:
+def _sources_schema(
+    default_sources: list[str] | None = None,
+    default_delta_sources: list[str] | None = None,
+) -> vol.Schema:
     return vol.Schema(
         {
-            vol.Required(
+            vol.Optional(
                 CONF_SOURCE_ENTITIES,
                 default=default_sources or [],
             ): selector.selector(
@@ -62,6 +66,10 @@ def _sources_schema(default_sources: list[str] | None = None) -> vol.Schema:
                     }
                 }
             ),
+            vol.Optional(
+                CONF_DELTA_SOURCE_ENTITIES,
+                default=default_delta_sources or [],
+            ): selector.selector({"entity": {"domain": "sensor", "multiple": True}}),
         }
     )
 
@@ -69,7 +77,7 @@ def _sources_schema(default_sources: list[str] | None = None) -> vol.Schema:
 def _primary_sources_schema(
     sources: list[str], default_sources: list[str] | None = None
 ) -> vol.Schema:
-    """Return a selector limited to the source climates chosen in step 1."""
+    """Return a selector limited to both source types chosen in step 1."""
     defaults = [source for source in (default_sources or []) if source in sources]
     return vol.Schema(
         {
@@ -315,21 +323,24 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialise config flow."""
         self._source_entities: list[str] = []
+        self._delta_source_entities: list[str] = []
         self._primary_source_entities: list[str] = []
         self._destination_settings: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 1: select source climate entities."""
+        """Step 1: select climate sources and/or explicit delta sensors."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             sources = user_input.get(CONF_SOURCE_ENTITIES, [])
-            if not sources:
+            delta_sources = user_input.get(CONF_DELTA_SOURCE_ENTITIES, [])
+            if not sources and not delta_sources:
                 errors[CONF_SOURCE_ENTITIES] = "no_sources"
             else:
                 self._source_entities = list(sources)
+                self._delta_source_entities = list(delta_sources)
                 return await self.async_step_primary_sources()
 
         return self.async_show_form(
@@ -344,12 +355,13 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.FlowResult:
         """Step 2: select the subset allowed to start piggyback demand."""
         errors: dict[str, str] = {}
+        all_sources = self._source_entities + self._delta_source_entities
 
         if user_input is not None:
             primary_sources = list(user_input.get(CONF_PRIMARY_SOURCE_ENTITIES, []))
             if not primary_sources:
                 errors[CONF_PRIMARY_SOURCE_ENTITIES] = "no_primary_sources"
-            elif any(source not in self._source_entities for source in primary_sources):
+            elif any(source not in all_sources for source in primary_sources):
                 errors[CONF_PRIMARY_SOURCE_ENTITIES] = "primary_not_source"
             else:
                 self._primary_source_entities = primary_sources
@@ -358,7 +370,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="primary_sources",
             data_schema=_primary_sources_schema(
-                self._source_entities, self._source_entities
+                all_sources, all_sources
             ),
             errors=errors,
             last_step=False,
@@ -420,6 +432,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     title="ClimateSync",
                     data={
                         CONF_SOURCE_ENTITIES: self._source_entities,
+                        CONF_DELTA_SOURCE_ENTITIES: self._delta_source_entities,
                         CONF_PRIMARY_SOURCE_ENTITIES: self._primary_source_entities,
                         **self._destination_settings,
                         CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],
@@ -464,6 +477,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
         """Initialise options flow."""
         self._config_entry = config_entry
         self._source_entities: list[str] = []
+        self._delta_source_entities: list[str] = []
         self._primary_source_entities: list[str] = []
         self._destination_settings: dict[str, Any] = {}
 
@@ -476,21 +490,26 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 1 (re-configure): select source climate entities."""
+        """Step 1 (re-configure): select climates and/or delta sensors."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             sources = user_input.get(CONF_SOURCE_ENTITIES, [])
-            if not sources:
+            delta_sources = user_input.get(CONF_DELTA_SOURCE_ENTITIES, [])
+            if not sources and not delta_sources:
                 errors[CONF_SOURCE_ENTITIES] = "no_sources"
             else:
                 self._source_entities = list(sources)
+                self._delta_source_entities = list(delta_sources)
                 return await self.async_step_primary_sources()
 
         current_sources = self._get(CONF_SOURCE_ENTITIES, [])
         return self.async_show_form(
             step_id="init",
-            data_schema=_sources_schema(default_sources=current_sources),
+            data_schema=_sources_schema(
+                default_sources=current_sources,
+                default_delta_sources=self._get(CONF_DELTA_SOURCE_ENTITIES, []),
+            ),
             errors=errors,
             last_step=False,
         )
@@ -500,29 +519,30 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Step 2 (re-configure): select primary source subset."""
         errors: dict[str, str] = {}
+        all_sources = self._source_entities + self._delta_source_entities
 
         if user_input is not None:
             primary_sources = list(user_input.get(CONF_PRIMARY_SOURCE_ENTITIES, []))
             if not primary_sources:
                 errors[CONF_PRIMARY_SOURCE_ENTITIES] = "no_primary_sources"
-            elif any(source not in self._source_entities for source in primary_sources):
+            elif any(source not in all_sources for source in primary_sources):
                 errors[CONF_PRIMARY_SOURCE_ENTITIES] = "primary_not_source"
             else:
                 self._primary_source_entities = primary_sources
                 return await self.async_step_destination()
 
         configured_primary = list(
-            self._get(CONF_PRIMARY_SOURCE_ENTITIES, self._source_entities)
+            self._get(CONF_PRIMARY_SOURCE_ENTITIES, all_sources)
         )
         current_primary = [
-            source for source in configured_primary if source in self._source_entities
+            source for source in configured_primary if source in all_sources
         ]
         if not current_primary:
-            current_primary = list(self._source_entities)
+            current_primary = list(all_sources)
 
         return self.async_show_form(
             step_id="primary_sources",
-            data_schema=_primary_sources_schema(self._source_entities, current_primary),
+            data_schema=_primary_sources_schema(all_sources, current_primary),
             errors=errors,
             last_step=False,
         )
@@ -594,6 +614,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                     title="",
                     data={
                         CONF_SOURCE_ENTITIES: self._source_entities,
+                        CONF_DELTA_SOURCE_ENTITIES: self._delta_source_entities,
                         CONF_PRIMARY_SOURCE_ENTITIES: self._primary_source_entities,
                         **self._destination_settings,
                         CONF_RESYNC_INTERVAL: user_input[CONF_RESYNC_INTERVAL],

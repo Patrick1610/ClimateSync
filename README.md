@@ -3,7 +3,16 @@
 [![HACS Custom][hacs-shield]][hacs-url]
 [![License: MIT][license-shield]][license-url]
 
-> **Developed with Plugwise Emma in mind. Source climates expose `current_temperature` and `temperature`; destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
+> **Developed with Plugwise Emma in mind. Mix source climates (`current_temperature` and `temperature`) with numerical heating-demand delta sensors in °C. Destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
+
+## Release 1.3.0
+
+Climate sources and numerical delta sensors can now be used together, or either
+type on its own. Both feed the same maximum-delta calculation and primary-source
+selection. Missing or invalid inputs contribute zero without blocking healthy
+rooms. Existing source selections, hysteresis, rounding, rate limiting and
+destination control remain unchanged; no room switches to a new source automatically.
+PI-to-delta conversion remains in external helpers, not in ClimateSync.
 
 ## Release 1.2.7
 
@@ -47,7 +56,7 @@ anti-flap and rounding behaviour remain unchanged.
 Heating range destinations are supported by controlling `target_temp_low` while
 preserving their current `target_temp_high` atomically.
 
-ClimateSync is a HACS-ready Home Assistant custom integration that implements **delta-based thermostat synchronisation**. It reads the heating demand (delta between target and current temperature) from multiple source climate entities (rooms) and drives a single destination thermostat by continuously adjusting its target temperature.
+ClimateSync is a HACS-ready Home Assistant custom integration that implements **delta-based thermostat synchronisation**. It reads heating demand from source climates (target minus current temperature) and/or already calculated numerical delta sensors, then drives a single destination thermostat by continuously adjusting its target temperature.
 
 ### Why delta-based instead of copying the highest setpoint?
 
@@ -66,6 +75,7 @@ Even without an Emma, this delta-based method is more accurate than copying setp
 ## Features
 
 - Event-driven updates — reacts immediately to temperature changes.
+- Mixed sources: climate entities and explicit numerical delta sensors in °C.
 - Periodic resync (configurable, default 60 s) to recover from missed events.
 - Anti-flap: only sends `climate.set_temperature` when the change exceeds a configurable threshold (default 0.2 °C).
 - Configurable demand hysteresis: start heating at 0.3 °C room delta and stop at 0.1 °C by default.
@@ -99,11 +109,38 @@ Navigate to **Settings → Devices & Services → Add Integration → ClimateSyn
 
 ### Step 1 — Source rooms
 
-Select one or more **climate entities** that represent the rooms whose heating demand should be tracked. Each selected entity must expose `current_temperature` and `temperature` attributes.
+Choose either or both fields; together they must contain at least one source:
+
+- **Source climate entities**: existing room thermostats exposing
+  `current_temperature` and `temperature`. Their contribution remains
+  `max(target - current, 0)`; an `off` climate contributes zero.
+- **Heating-demand delta sensors (°C)**: sensors whose numeric state is already
+  the required heating gap in Celsius. For example, an external helper can
+  translate 20 percentage points of raw PI demand × 0.03 °C per percentage point
+  into **0.60 °C**. Select that helper, not the raw percentage sensor or a room
+  temperature sensor. ClimateSync does not perform PI conversion or phase selection.
+
+The highest delta wins, **not the sum**. A mixture of 0.60 °C from a PI helper,
+0.40 °C from an office climate and 0.25 °C from a bathroom climate produces
+0.60 °C. With the destination measuring 20.3 °C, its raw target is 20.9 °C.
+Normal demand thresholds, rounding and limits still apply.
+
+Missing, `unknown`, `unavailable`, nonnumeric or non-finite delta values contribute
+zero. A delta sensor must report `unit_of_measurement: °C`; other or missing units
+are also treated as invalid zero demand. Healthy sources continue to drive the
+destination, with existing source-health diagnostics showing the failed sources.
+If all sources fail, ClimateSync withdraws demand using the existing idle fallback.
+
+**Move one room at a time:** select its delta helper and remove that room's old
+climate sources from ClimateSync. Leaving both selected can let the old
+temperature gap overrule PI modulation. Other rooms can stay on climate sources.
+Review the room's primary-source role in step 2. No source, primary role or
+setting is replaced automatically by an upgrade. Do not select ClimateSync's own
+calculated output sensors as inputs, which would create a feedback loop.
 
 ### Step 2 — Primary sources
 
-Select the subset of source rooms that may enable other rooms to piggyback on
+Select the subset of sources (climates and/or delta sensors) that may enable other rooms to piggyback on
 an existing heating run. General destination control still uses **all** sources.
 A secondary room can therefore start heating when it falls below its own target,
 but it does not turn on `Primary Heating Demand Active`.
@@ -171,6 +208,12 @@ For each source climate entity (room):
         source is degraded; delta = 0
     else:
         source is active; delta = max(target - current, 0)
+
+For each selected numerical delta sensor:
+    if state is missing, invalid, non-finite, or unit is not °C:
+        source is degraded; delta = 0
+    else:
+        source is usable; delta = max(numeric state, 0)
 
 If no usable source remains:
     apply idle_temperature to withdraw prior heating demand
@@ -313,15 +356,15 @@ thresholds, source list, and source-health diagnostics as attributes.
 
 #### Per-room delta sensors — `sensor.climatesync_delta_<slug>`
 
-One sensor per source climate entity.
+One sensor per configured source, climate or numerical delta sensor.
 
 | Attribute | Description |
 |---|---|
-| `source_entity_id` | The climate entity this sensor tracks |
-| `current_temperature` | Last known current temperature |
-| `target_temperature` | Last known target temperature |
-| `raw_delta` | `target - current` (may be negative) |
-| `source_status` | `active`, `inactive_off`, `unavailable`, or `missing_temperature` |
+| `source_entity_id` | The source entity this sensor tracks |
+| `current_temperature` | Current temperature for a climate; null for a delta sensor |
+| `target_temperature` | Target temperature for a climate; null for a delta sensor |
+| `raw_delta` | `target - current`, or the numeric delta sensor state (may be negative) |
+| `source_status` | `active`, `inactive_off`, `unavailable`, `missing_temperature`, `invalid_delta`, or `invalid_delta_unit` |
 
 **State**: `max(raw_delta, 0)` — the effective heating demand for this room.
 
@@ -375,7 +418,7 @@ Shows the destination thermostat's actual current target temperature in real tim
 | `skipped_anti_flap` | Times a setpoint update was skipped because the change was within the threshold |
 | `skipped_rate_limit` | Times a setpoint update was skipped due to rate limiting |
 | `last_error` | Last exception message, if any |
-| `source_count` | Number of configured source climates |
+| `source_count` | Number of configured climate and delta-sensor sources |
 | `usable_source_count` | Number of sources currently safe to use |
 | `degraded_source_entities` | Sources currently ignored because data is unavailable or incomplete |
 | `inactive_source_entities` | `off` sources that remain valid measurements with zero demand |
@@ -401,7 +444,8 @@ The source rooms are changing temperature very rapidly. Increase `min_send_inter
 No selected source currently provides usable data. ClimateSync actively applies
 the configured idle temperature so an earlier heating request cannot remain in
 effect. Restore at least one source with a valid `current_temperature` and
-`temperature`, or an `off` source with a valid `current_temperature`.
+`temperature`, an `off` source with a valid `current_temperature`, or a finite
+numerical delta sensor with a °C unit.
 
 ### `degraded_source_data`
 
@@ -421,7 +465,7 @@ Check `last_error` in the `sensor.climatesync_status` attributes. Most likely th
 
 ## Compatibility
 
-ClimateSync uses only the standard `climate.set_temperature` service and reads standard climate entity attributes (`current_temperature`, `temperature`). It works with any climate integration that follows the standard HA climate platform contract, including but not limited to:
+ClimateSync uses only the standard `climate.set_temperature` service. It reads standard source climate attributes (`current_temperature`, `temperature`) and/or numerical heating-demand delta sensors in °C. Delta sensors remain read-only inputs; ClimateSync never writes them. It works with any climate integration that follows the standard HA climate platform contract, including but not limited to:
 
 - Plugwise Emma / Smile
 - Generic Thermostat
@@ -429,6 +473,21 @@ ClimateSync uses only the standard `climate.set_temperature` service and reads s
 - Z-Wave thermostats
 - Zigbee thermostats (ZHA / Zigbee2MQTT)
 - Google Nest (via the Nest integration)
+
+---
+
+## Tests
+
+The coordinator, entities, diagnostics and setup/options wizard have isolated
+unit tests. Install `pytest`, `pytest-asyncio` and `voluptuous`, then run:
+
+```sh
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin -q
+```
+
+Only the asyncio plugin is enabled explicitly so unrelated Home Assistant test
+plugins in a shared environment cannot change these unit tests. GitHub Actions
+runs the same suite, plus the existing hassfest and HACS validation workflows.
 
 ---
 
