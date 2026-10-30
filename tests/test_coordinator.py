@@ -776,6 +776,45 @@ async def test_anti_flap_skip_counter():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_target", "threshold", "expected_send"),
+    [
+        (21.9, 0.1, True),
+        (22.1, 0.1, True),
+        (21.8, 0.2, True),
+        (22.2, 0.2, True),
+        (21.95, 0.1, False),
+        (22.0999, 0.1, False),
+        (22.0, 0.0, False),
+        (22.0000000001, 0.0, False),
+        (22.01, 0.0, True),
+    ],
+)
+async def test_minimum_destination_change_is_inclusive(
+    current_target, threshold, expected_send
+):
+    """A whole configured step is sent in either direction; equality is quiet."""
+    coord, hass = _build_coordinator(min_change_threshold=threshold)
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+            "climate.dest": _make_state(
+                current_temperature=20.0, target_temperature=current_target
+            ),
+        },
+    )
+
+    await coord._async_evaluate()
+
+    assert hass.services.async_call.call_count == int(expected_send)
+    assert (coord.mismatch_since is not None) is expected_send
+    assert coord.skipped_anti_flap == int(not expected_send)
+    if expected_send:
+        assert hass.services.async_call.call_args.args[2]["temperature"] == 22.0
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_skip_counter():
     """skipped_rate_limit increments when service call is rate-limited."""
     coord, hass = _build_coordinator(

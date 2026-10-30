@@ -30,7 +30,7 @@
       },
       "control": {
         "title": "ClimateSync – Stap 4 van 4: Vraag & beveiligingen",
-        "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** voorkomt onbeduidende schrijfopdrachten; deze bepaalt niet of vraag actief is. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
+        "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** is inclusief: precies dit verschil wordt verzonden; een ongewijzigd doel wordt overgeslagen. Deze instelling bepaalt niet of vraag actief is. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
         "data": {
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
           "min_change_threshold": "Minimale bestemmingswijziging (°C)",
@@ -81,7 +81,7 @@
       },
       "control": {
         "title": "ClimateSync – Stap 4 van 4: Vraag & beveiligingen",
-        "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** onderdrukt alleen onbeduidende schrijfopdrachten. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
+        "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** is inclusief: precies dit verschil wordt verzonden; een ongewijzigd doel wordt overgeslagen. Deze instelling bepaalt niet of vraag actief is. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
         "data": {
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
           "min_change_threshold": "Minimale bestemmingswijziging (°C)",

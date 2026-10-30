@@ -5,6 +5,14 @@
 
 > **Developed with Plugwise Emma in mind. Mix source climates (`current_temperature` and `temperature`) with numerical heating-demand delta sensors in °C. Destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.3.2
+
+The minimum destination change is inclusive: a configured 0.1 °C change sends
+both upward and downward steps of exactly 0.1 °C, with tolerance for decimal
+floating-point representation. Identical targets remain quiet, even with a
+zero minimum. Mismatch tracking uses the same decision as delivery. Source
+selection, demand hysteresis, rounding and rate limiting are unchanged.
+
 ## Release 1.3.0
 
 Climate sources and numerical delta sensors can now be used together, or either
@@ -77,7 +85,7 @@ Even without an Emma, this delta-based method is more accurate than copying setp
 - Event-driven updates — reacts immediately to temperature changes.
 - Mixed sources: climate entities and explicit numerical delta sensors in °C.
 - Periodic resync (configurable, default 60 s) to recover from missed events.
-- Anti-flap: only sends `climate.set_temperature` when the change exceeds a configurable threshold (default 0.2 °C).
+- Anti-flap: only sends `climate.set_temperature` when a nonzero change reaches a configurable minimum (default 0.2 °C).
 - Configurable demand hysteresis: start heating at 0.3 °C room delta and stop at 0.1 °C by default.
 - All-source and primary-source heating-demand binary sensors, both driven by the configured hysteresis.
 - Destination target selection: ordinary `temperature` (default) or heating-range `target_temp_low`.
@@ -170,7 +178,7 @@ so the upgrade does not silently narrow their demand scope.
 | Option | Default | Description |
 |---|---|---|
 | Resync interval | 60 s | How often ClimateSync checks even without state changes. |
-| Minimum destination change | 0.2 °C | Only send a new destination setpoint when the change exceeds this. It does not determine demand state. |
+| Minimum destination change | 0.2 °C | Send a changed destination setpoint when the difference reaches this minimum. It does not determine demand state. |
 | Heating-demand activation threshold | 0.3 °C | Delta required to switch either demand scope on. |
 | Heating-demand deactivation threshold | 0.1 °C | Delta at or below which an active demand scope switches off. Must be lower than activation. |
 | Minimum send interval | 10 s | At most one destination service call per this many seconds. |
@@ -195,7 +203,7 @@ shows **Submit**. You can change:
 | Rounding mode | 1 decimal | Step size used for setpoints. |
 | Rounding direction | nearest | `floor`, `nearest`, or `ceiling` rounding within the selected mode. |
 | Resync interval | 60 s | How often ClimateSync checks even without state changes. |
-| Minimum change threshold | 0.2 °C | Only send a new setpoint if the change exceeds this. |
+| Minimum change threshold | 0.2 °C | Send a changed setpoint when the difference reaches this minimum. |
 | Heating-demand activation threshold | 0.3 °C | Minimum room delta required to activate the destination thermostat. |
 | Heating-demand deactivation threshold | 0.1 °C | Delta at or below which active heating demand stops. Must be lower than the activation threshold. |
 | Minimum send interval | 10 s | At most one service call per this many seconds. |
@@ -249,7 +257,7 @@ Else:
 rounded_setpoint = round_setpoint(setpoint_raw, rounding_mode, rounding_direction)
 setpoint_final = min(rounded_setpoint, maximum_setpoint)
 
-If abs(destination_current_target - setpoint_final) > min_change_threshold:
+If the target changed AND abs(destination_current_target - setpoint_final) >= min_change_threshold:
     If time_since_last_call >= min_send_interval:
         If destination_target == temperature:
             climate.set_temperature(destination, temperature=setpoint_final)

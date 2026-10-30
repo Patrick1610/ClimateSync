@@ -30,7 +30,7 @@
       },
       "control": {
         "title": "ClimateSync – Step 4 of 4: Demand & safeguards",
-        "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** prevents insignificant destination writes; it does not decide whether demand is active. Resync recovers missed events and the minimum send interval rate-limits writes.",
+        "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** is inclusive: exactly this difference is sent, while identical targets are skipped. It does not decide whether demand is active. Resync recovers missed events and the minimum send interval rate-limits writes.",
         "data": {
           "resync_interval_seconds": "Resync interval (seconds)",
           "min_change_threshold": "Minimum destination change (°C)",
@@ -81,7 +81,7 @@
       },
       "control": {
         "title": "ClimateSync – Step 4 of 4: Demand & safeguards",
-        "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** only suppresses insignificant destination writes. Resync recovers missed events and the minimum send interval rate-limits writes.",
+        "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** is inclusive: exactly this difference is sent, while identical targets are skipped. It does not decide whether demand is active. Resync recovers missed events and the minimum send interval rate-limits writes.",
         "data": {
           "resync_interval_seconds": "Resync interval (seconds)",
           "min_change_threshold": "Minimum destination change (°C)",

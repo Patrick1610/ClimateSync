@@ -63,6 +63,15 @@ _ROUNDING_EPSILON = 1e-9
 _DEMAND_EPSILON = 1e-6
 
 
+def _setpoint_change_required(current: float, desired: float, threshold: float) -> bool:
+    """Include the configured minimum, tolerating decimal float representation.
+
+    An unchanged target never needs sending, including when the minimum is zero.
+    """
+    difference = abs(current - desired)
+    return difference > _ROUNDING_EPSILON and difference + _ROUNDING_EPSILON >= threshold
+
+
 def _safe_float(value: Any) -> float | None:
     """Convert a value to float, returning None if it is unavailable/unknown/missing."""
     if value is None:
@@ -670,7 +679,9 @@ class ClimateSyncCoordinator:
         # Mismatch tracking
         if self.destination_current_target is not None:
             diff = abs(self.destination_current_target - setpoint_final)
-            if diff > self._min_change_threshold:
+            if _setpoint_change_required(
+                self.destination_current_target, setpoint_final, self._min_change_threshold
+            ):
                 if self.mismatch_since is None:
                     self.mismatch_since = dt_util.utcnow()
                 self.mismatch_seconds = (
@@ -732,7 +743,9 @@ class ClimateSyncCoordinator:
 
         # Anti-flap
         if current_target is not None:
-            if abs(current_target - setpoint) <= self._min_change_threshold:
+            if not _setpoint_change_required(
+                current_target, setpoint, self._min_change_threshold
+            ):
                 self.skipped_anti_flap += 1
                 _LOGGER.debug(
                     "ClimateSync: skipped (anti-flap), current=%.2f desired=%.2f diff=%.2f threshold=%.2f",
