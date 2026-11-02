@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "ClimateSync – Stap 1 van 4: Warmtebronnen",
+        "title": "ClimateSync – Stap 1 van 5: Warmtebronnen",
         "description": "Kies climate-bronnen, delta-sensoren of een combinatie. Climates leveren doel minus actuele temperatuur; delta-sensoren leveren een al berekend warmtevraagverschil in **°C**, geen kamertemperatuur of percentage. De hoogste positieve delta stuurt de bestemming aan, nooit de som. Ontbrekende of ongeldige bronnen tellen als **0**; gezonde bronnen blijven werken. Selecteer over beide velden samen minimaal één bron. Stap je voor een kamer over op een delta-sensor, verwijder dan de oude climate-bronnen van die kamer zodat die niet blijven overheersen. Bestaande selecties blijven behouden totdat je ze zelf wijzigt.",
         "data": {
           "source_entities": "Bron-klimaatentiteiten",
@@ -10,26 +10,26 @@
         }
       },
       "primary_sources": {
-        "title": "ClimateSync – Stap 2 van 4: Primaire bronnen",
+        "title": "ClimateSync – Stap 2 van 5: Primaire bronnen",
         "description": "Selecteer de kamers die andere kamers mogen laten meeliften op een bestaande verwarmingsronde. **Primaire warmtevraag actief** gebruikt alleen deze selectie en dezelfde hysterese als de algemene vraag. Een secundaire bron kan nog steeds algemene verwarming starten als hij onder zijn eigen doel komt, maar activeert de primaire-vraagentiteit niet.",
         "data": {
           "primary_source_entities": "Primaire bronnen (climates en delta-sensoren)"
         }
       },
       "destination": {
-        "title": "ClimateSync – Stap 3 van 4: Bestemmingssetpoint",
-        "description": "Selecteer de thermostaat die ClimateSync bestuurt en hoe het setpoint wordt gevormd. Kies **Doeltemperatuur** voor gewone climates of **Onderste doeltemperatuur** voor een verwarmingsbereik; de actuele bovengrens blijft dan atomair behouden. De rusttemperatuur trekt vraag in en het maximumsetpoint is een harde veiligheidsgrens.",
+        "title": "ClimateSync – Stap 3 van 5: Bestemmingssetpoint",
+        "description": "Selecteer de thermostaat die ClimateSync bestuurt en hoe het setpoint wordt gevormd. Kies **Doeltemperatuur** voor gewone climates of **Onderste doeltemperatuur** voor een verwarmingsbereik; de actuele bovengrens blijft dan atomair behouden. Het maximumsetpoint is een harde veiligheidsgrens.\n\n**Setback target** gebruikt een vaste rusttemperatuur. **Setback delta** verlaagt de actuele temperatuur van het toestel met een instelbaar aantal graden. In de volgende stap vul je één waarde in. Delta 0 geeft een doel gelijk aan de actuele toesteltemperatuur; het toestel bepaalt zelf of daarbij nog warmte nodig is.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "destination_target": "Te bedienen doel van de bestemming",
-          "idle_temperature": "Rusttemperatuur (°C)",
           "max_setpoint": "Maximaal setpoint (°C)",
           "rounding_mode": "Afrondingsstap setpoint",
-          "rounding_direction": "Afrondingsrichting"
+          "rounding_direction": "Afrondingsrichting",
+          "idle_mode": "Rustmodus"
         }
       },
       "control": {
-        "title": "ClimateSync – Stap 4 van 4: Vraag & beveiligingen",
+        "title": "ClimateSync – Stap 5 van 5: Vraag & beveiligingen",
         "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** is inclusief: precies dit verschil wordt verzonden; een ongewijzigd doel wordt overgeslagen. Deze instelling bepaalt niet of vraag actief is. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
         "data": {
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
@@ -37,6 +37,20 @@
           "demand_activation_threshold": "Inschakeldrempel warmtevraag (°C)",
           "demand_deactivation_threshold": "Uitschakeldrempel warmtevraag (°C)",
           "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
+        }
+      },
+      "setback_target": {
+        "title": "ClimateSync – Stap 4 van 5: Vast rustdoel",
+        "description": "Vaste doeltemperatuur zonder actieve warmtevraag. Bijvoorbeeld 10 betekent altijd 10 °C. Het minimum en maximum volgen de bestemming en de ingestelde veiligheidsgrens. Invoerstap: 0,5 °C.",
+        "data": {
+          "idle_value": "Rustdoel (°C)"
+        }
+      },
+      "setback_delta": {
+        "title": "ClimateSync – Stap 4 van 5: Relatieve rustverlaging",
+        "description": "Rustdoel = actuele toesteltemperatuur − rustverlaging. Bij 20,7 °C geeft 10 een doel van 10,7 °C en 0 een doel van 20,7 °C. Minimum: 0; invoerstap: 0,5 °C. Het berekende doel blijft binnen de toestelgrenzen. Ontbreekt de actuele temperatuur, dan wordt de toestelondergrens gebruikt. Delta 0 garandeert geen nul warmtevraag van het toestel.",
+        "data": {
+          "idle_value": "Rustverlaging (°C)"
         }
       }
     },
@@ -47,13 +61,16 @@
       "no_destination": "Selecteer een bestemmings-thermostaat.",
       "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
       "demand_threshold_order": "De uitschakeldrempel moet lager zijn dan de inschakeldrempel.",
-      "destination_target_unsupported": "De gekozen bestemming biedt het geselecteerde doel momenteel niet aan. Een onderste doeltemperatuur vereist ook een geldige bovengrens."
+      "destination_target_unsupported": "De gekozen bestemming biedt het geselecteerde doel momenteel niet aan. Een onderste doeltemperatuur vereist ook een geldige bovengrens.",
+      "invalid_idle_mode": "Kies een geldige rustmodus.",
+      "invalid_idle_value": "Vul een eindige waarde binnen de toegestane grenzen in.",
+      "destination_limits_unavailable": "De toestelgrenzen ontbreken of zijn strijdig met de ingestelde maximumtemperatuur. Controleer de bestemming."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "ClimateSync – Stap 1 van 4: Warmtebronnen",
+        "title": "ClimateSync – Stap 1 van 5: Warmtebronnen",
         "description": "Kies climate-bronnen, delta-sensoren of een combinatie. Climates leveren doel minus actuele temperatuur; delta-sensoren leveren een al berekend warmtevraagverschil in **°C**, geen kamertemperatuur of percentage. De hoogste positieve delta stuurt de bestemming aan, nooit de som. Ontbrekende of ongeldige bronnen tellen als **0**; gezonde bronnen blijven werken. Selecteer over beide velden samen minimaal één bron. Stap je voor een kamer over op een delta-sensor, verwijder dan de oude climate-bronnen van die kamer zodat die niet blijven overheersen. Een verwijderde bron verdwijnt ook uit de beschikbare primaire selectie. Kamers schakelen niet automatisch over.",
         "data": {
           "source_entities": "Bron-klimaatentiteiten",
@@ -61,26 +78,26 @@
         }
       },
       "primary_sources": {
-        "title": "ClimateSync – Stap 2 van 4: Primaire bronnen",
+        "title": "ClimateSync – Stap 2 van 5: Primaire bronnen",
         "description": "Selecteer de kamers die andere kamers mogen laten meeliften op een bestaande verwarmingsronde. **Primaire warmtevraag actief** gebruikt alleen deze selectie en dezelfde hysterese als de algemene vraag. Secundaire bronnen tellen wel mee voor algemene vraag, maar nooit voor primaire vraag.",
         "data": {
           "primary_source_entities": "Primaire bronnen (climates en delta-sensoren)"
         }
       },
       "destination": {
-        "title": "ClimateSync – Stap 3 van 4: Bestemmingssetpoint",
-        "description": "Kies de bestemmings-thermostaat en het setpointgedrag. Selecteer bij een verwarmingsbereik **Onderste doeltemperatuur**; ClimateSync behoudt de actuele bovengrens in dezelfde actie. De rusttemperatuur trekt vraag in en het maximumsetpoint blijft een harde grens.",
+        "title": "ClimateSync – Stap 3 van 5: Bestemmingssetpoint",
+        "description": "Kies de bestemmings-thermostaat en het setpointgedrag. Selecteer bij een verwarmingsbereik **Onderste doeltemperatuur**; ClimateSync behoudt de actuele bovengrens in dezelfde actie. Het maximumsetpoint blijft een harde grens.\n\n**Setback target** gebruikt een vaste rusttemperatuur. **Setback delta** verlaagt de actuele temperatuur van het toestel met een instelbaar aantal graden. In de volgende stap vul je één waarde in. Delta 0 geeft een doel gelijk aan de actuele toesteltemperatuur; het toestel bepaalt zelf of daarbij nog warmte nodig is.",
         "data": {
           "destination_entity": "Bestemmings-thermostaat",
           "destination_target": "Te bedienen doel van de bestemming",
-          "idle_temperature": "Rusttemperatuur (°C)",
           "max_setpoint": "Maximaal setpoint (°C)",
           "rounding_mode": "Afrondingsstap setpoint",
-          "rounding_direction": "Afrondingsrichting"
+          "rounding_direction": "Afrondingsrichting",
+          "idle_mode": "Rustmodus"
         }
       },
       "control": {
-        "title": "ClimateSync – Stap 4 van 4: Vraag & beveiligingen",
+        "title": "ClimateSync – Stap 5 van 5: Vraag & beveiligingen",
         "description": "De inschakel- en uitschakeldrempel vormen één hysterese voor beide vraagentiteiten: vraag start bij de hogere waarde en blijft actief tot de lagere waarde is bereikt. **Minimale bestemmingswijziging** is inclusief: precies dit verschil wordt verzonden; een ongewijzigd doel wordt overgeslagen. Deze instelling bepaalt niet of vraag actief is. Hersynchronisatie herstelt gemiste gebeurtenissen en het minimale verzendinterval begrenst schrijfopdrachten.",
         "data": {
           "resync_interval_seconds": "Hersynchronisatie-interval (seconden)",
@@ -88,6 +105,20 @@
           "demand_activation_threshold": "Inschakeldrempel warmtevraag (°C)",
           "demand_deactivation_threshold": "Uitschakeldrempel warmtevraag (°C)",
           "min_send_interval_seconds": "Minimaal verzendinterval (seconden)"
+        }
+      },
+      "setback_target": {
+        "title": "ClimateSync – Stap 4 van 5: Vast rustdoel",
+        "description": "Vaste doeltemperatuur zonder actieve warmtevraag. Bijvoorbeeld 10 betekent altijd 10 °C. Het minimum en maximum volgen de bestemming en de ingestelde veiligheidsgrens. Invoerstap: 0,5 °C.",
+        "data": {
+          "idle_value": "Rustdoel (°C)"
+        }
+      },
+      "setback_delta": {
+        "title": "ClimateSync – Stap 4 van 5: Relatieve rustverlaging",
+        "description": "Rustdoel = actuele toesteltemperatuur − rustverlaging. Bij 20,7 °C geeft 10 een doel van 10,7 °C en 0 een doel van 20,7 °C. Minimum: 0; invoerstap: 0,5 °C. Het berekende doel blijft binnen de toestelgrenzen. Ontbreekt de actuele temperatuur, dan wordt de toestelondergrens gebruikt. Delta 0 garandeert geen nul warmtevraag van het toestel.",
+        "data": {
+          "idle_value": "Rustverlaging (°C)"
         }
       }
     },
@@ -98,7 +129,10 @@
       "no_destination": "Selecteer een bestemmings-thermostaat.",
       "dest_is_source": "De bestemmings-thermostaat kan niet tegelijk een bronkamer zijn.",
       "demand_threshold_order": "De uitschakeldrempel moet lager zijn dan de inschakeldrempel.",
-      "destination_target_unsupported": "De gekozen bestemming biedt het geselecteerde doel momenteel niet aan. Een onderste doeltemperatuur vereist ook een geldige bovengrens."
+      "destination_target_unsupported": "De gekozen bestemming biedt het geselecteerde doel momenteel niet aan. Een onderste doeltemperatuur vereist ook een geldige bovengrens.",
+      "invalid_idle_mode": "Kies een geldige rustmodus.",
+      "invalid_idle_value": "Vul een eindige waarde binnen de toegestane grenzen in.",
+      "destination_limits_unavailable": "De toestelgrenzen ontbreken of zijn strijdig met de ingestelde maximumtemperatuur. Controleer de bestemming."
     }
   },
   "selector": {
@@ -120,6 +154,12 @@
       "options": {
         "temperature": "Doeltemperatuur (standaard)",
         "target_temp_low": "Onderste doeltemperatuur (verwarmingsbereik)"
+      }
+    },
+    "idle_mode": {
+      "options": {
+        "target": "Setback target — vast rustdoel",
+        "delta": "Setback delta — relatieve rustverlaging"
       }
     }
   }

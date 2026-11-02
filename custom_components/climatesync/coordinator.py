@@ -21,7 +21,9 @@ from .const import (
     CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
     CONF_DESTINATION_TARGET,
+    CONF_IDLE_MODE,
     CONF_IDLE_TEMPERATURE,
+    CONF_IDLE_VALUE,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
@@ -43,6 +45,8 @@ from .const import (
     DESTINATION_TARGET_HIGH,
     DESTINATION_TARGET_LOW,
     DESTINATION_TARGETS,
+    IDLE_MODE_DELTA,
+    IDLE_MODE_TARGET,
     ROUNDING_DIRECTION_CEILING,
     ROUNDING_DIRECTION_FLOOR,
     ROUNDING_DIRECTIONS,
@@ -57,6 +61,7 @@ from .const import (
     STATUS_OK,
     STATUS_RATE_LIMITED,
 )
+from .setback import destination_limits, finite_temperature, idle_target
 
 _LOGGER = logging.getLogger(__name__)
 _ROUNDING_EPSILON = 1e-9
@@ -69,7 +74,9 @@ def _setpoint_change_required(current: float, desired: float, threshold: float) 
     An unchanged target never needs sending, including when the minimum is zero.
     """
     difference = abs(current - desired)
-    return difference > _ROUNDING_EPSILON and difference + _ROUNDING_EPSILON >= threshold
+    return (
+        difference > _ROUNDING_EPSILON and difference + _ROUNDING_EPSILON >= threshold
+    )
 
 
 def _safe_float(value: Any) -> float | None:
@@ -171,6 +178,9 @@ class ClimateSyncCoordinator:
         self._destination_entity: str = ""
         self._destination_target: str = DEFAULT_DESTINATION_TARGET
         self._idle_temperature: float = DEFAULT_IDLE_TEMPERATURE
+        self._idle_mode: str = IDLE_MODE_TARGET
+        self.idle_setpoint: float | None = None
+        self.idle_fallback_active: bool = False
         self._max_setpoint: float = DEFAULT_MAX_SETPOINT
         self._rounding_mode: str = DEFAULT_ROUNDING_MODE
         self._rounding_direction: str = DEFAULT_ROUNDING_DIRECTION
@@ -283,9 +293,18 @@ class ClimateSyncCoordinator:
         # Options override data for shared keys
         self._idle_temperature = float(
             opts.get(
-                CONF_IDLE_TEMPERATURE,
-                data.get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+                CONF_IDLE_VALUE,
+                opts.get(
+                    CONF_IDLE_TEMPERATURE,
+                    data.get(
+                        CONF_IDLE_VALUE,
+                        data.get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+                    ),
+                ),
             )
+        )
+        self._idle_mode = opts.get(
+            CONF_IDLE_MODE, data.get(CONF_IDLE_MODE, IDLE_MODE_TARGET)
         )
         self._max_setpoint = float(
             opts.get(
@@ -457,7 +476,7 @@ class ClimateSyncCoordinator:
             self._notify_listeners()
             return
 
-        self.destination_current_temperature = _safe_float(
+        self.destination_current_temperature = finite_temperature(
             dest_state.attributes.get("current_temperature")
         )
         self.destination_current_target = _safe_float(
@@ -586,7 +605,12 @@ class ClimateSyncCoordinator:
             entity_id
             for entity_id, row in primary_rows.items()
             if row["source_status"]
-            in ("unavailable", "missing_temperature", "invalid_delta", "invalid_delta_unit")
+            in (
+                "unavailable",
+                "missing_temperature",
+                "invalid_delta",
+                "invalid_delta_unit",
+            )
         ]
         self.primary_inactive_source_entities = [
             entity_id
@@ -620,15 +644,30 @@ class ClimateSyncCoordinator:
                 self._demand_deactivation_threshold,
             )
 
-        # Compute setpoint
-        if not self.demand_active:
-            setpoint_raw = self._idle_temperature
+        # The configured value means an absolute target or a non-negative setback.
+        minimum, maximum = destination_limits(dest_state.attributes)
+        self.idle_fallback_active = (
+            self._idle_mode == IDLE_MODE_DELTA
+            and self.destination_current_temperature is None
+        )
+        self.idle_setpoint = idle_target(
+            self._idle_mode,
+            self._idle_temperature,
+            self.destination_current_temperature,
+            minimum,
+        )
+        if not self.demand_active or self.destination_current_temperature is None:
+            setpoint_raw = self.idle_setpoint
         else:
-            dest_current = self.destination_current_temperature
-            if dest_current is None:
-                setpoint_raw = self._idle_temperature
-            else:
-                setpoint_raw = dest_current + max_delta
+            setpoint_raw = self.destination_current_temperature + max_delta
+
+        if setpoint_raw is None or not math.isfinite(setpoint_raw):
+            self.status = STATUS_DESTINATION_UNAVAILABLE
+            self.last_error = (
+                "Cannot calculate idle target without a current temperature or minimum"
+            )
+            self._notify_listeners()
+            return
 
         self.raw_setpoint = setpoint_raw
         setpoint_rounded = round_setpoint(
@@ -637,30 +676,31 @@ class ClimateSyncCoordinator:
             self._rounding_direction,
         )
         self.rounded_setpoint = setpoint_rounded
-        setpoint_final = setpoint_rounded
-        # Clamp to the configured maximum setpoint.  This prevents a cascade
-        # where the destination propagates its new setpoint to source TRVs
-        # (e.g. Plugwise Adam), causing ClimateSync to compute an even higher
-        # setpoint on the very next evaluation.
-        if setpoint_final > self._max_setpoint:
-            _LOGGER.warning(
-                "ClimateSync: computed setpoint %.2f exceeds max_setpoint %.2f, clamping",
-                setpoint_final,
-                self._max_setpoint,
-            )
-            setpoint_final = self._max_setpoint
+        # Intersect the configured ceiling, device range and preserved upper target.
+        ceiling = self._max_setpoint
+        if maximum is not None:
+            ceiling = min(ceiling, maximum)
         if (
             self._destination_target == DESTINATION_TARGET_LOW
             and self.destination_paired_target is not None
-            and setpoint_final > self.destination_paired_target
         ):
+            ceiling = min(ceiling, self.destination_paired_target)
+        if minimum is not None and minimum > ceiling:
+            self.status = STATUS_DESTINATION_UNAVAILABLE
+            self.last_error = "Destination target limits are inconsistent"
+            self._notify_listeners()
+            return
+        setpoint_final = min(setpoint_rounded, ceiling)
+        if minimum is not None:
+            setpoint_final = max(setpoint_final, minimum)
+        if setpoint_final != setpoint_rounded:
             _LOGGER.warning(
-                "ClimateSync: computed lower target %.2f exceeds preserved upper "
-                "target %.2f, clamping",
+                "ClimateSync: clamped target %.2f to %.2f (minimum=%s, ceiling=%.2f)",
+                setpoint_rounded,
                 setpoint_final,
-                self.destination_paired_target,
+                minimum,
+                ceiling,
             )
-            setpoint_final = self.destination_paired_target
         self.computed_setpoint = setpoint_final
         self.last_desired_setpoint = setpoint_final
 
@@ -680,7 +720,9 @@ class ClimateSyncCoordinator:
         if self.destination_current_target is not None:
             diff = abs(self.destination_current_target - setpoint_final)
             if _setpoint_change_required(
-                self.destination_current_target, setpoint_final, self._min_change_threshold
+                self.destination_current_target,
+                setpoint_final,
+                self._min_change_threshold,
             ):
                 if self.mismatch_since is None:
                     self.mismatch_since = dt_util.utcnow()
@@ -875,8 +917,22 @@ class ClimateSyncCoordinator:
         return self._destination_entity
 
     @property
-    def idle_temperature(self) -> float:
-        """Return idle temperature."""
+    def idle_temperature(self) -> float | None:
+        """Return the absolute idle temperature, including in relative mode."""
+        return (
+            self._idle_temperature
+            if self._idle_mode == IDLE_MODE_TARGET
+            else self.idle_setpoint
+        )
+
+    @property
+    def idle_mode(self) -> str:
+        """Return how the single idle value is interpreted."""
+        return self._idle_mode
+
+    @property
+    def idle_value(self) -> float:
+        """Return the configured absolute target or temperature reduction."""
         return self._idle_temperature
 
     @property

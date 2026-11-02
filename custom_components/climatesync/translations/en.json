@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "ClimateSync – Step 1 of 4: Heating sources",
+        "title": "ClimateSync – Step 1 of 5: Heating sources",
         "description": "Choose climate sources, delta sensors, or a mixture. Climates contribute target minus current temperature; delta sensors supply an already calculated heating gap in **°C**, not a room temperature or a percentage. The highest positive delta controls the destination, never the sum. Missing or invalid sources contribute **0** while healthy sources continue. Select at least one source across both fields. When moving a room to a delta sensor, remove its old climate sources so they cannot overrule it. Existing selections stay unchanged until you edit them.",
         "data": {
           "source_entities": "Source climate entities",
@@ -10,26 +10,26 @@
         }
       },
       "primary_sources": {
-        "title": "ClimateSync – Step 2 of 4: Primary sources",
+        "title": "ClimateSync – Step 2 of 5: Primary sources",
         "description": "Select the rooms that may enable other rooms to piggyback on an existing heating run. The **Primary Heating Demand Active** entity uses only this subset and the same hysteresis as general demand. A secondary source can still start general heating when it is below its own target, but it will not activate the primary-demand entity.",
         "data": {
           "primary_source_entities": "Primary sources (climates and delta sensors)"
         }
       },
       "destination": {
-        "title": "ClimateSync – Step 3 of 4: Destination setpoint",
-        "description": "Select the thermostat ClimateSync controls and how the requested setpoint is formed. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating-range climate; the current upper target is then preserved atomically. The idle temperature withdraws demand, while the maximum setpoint is a hard safety ceiling.",
+        "title": "ClimateSync – Step 3 of 5: Destination setpoint",
+        "description": "Select the thermostat ClimateSync controls and how the requested setpoint is formed. Choose **Target temperature** for ordinary climates or **Lower target temperature** for a heating-range climate; the current upper target is then preserved atomically. The maximum setpoint is a hard ceiling.\n\n**Setback target** uses a fixed idle temperature. **Setback delta** subtracts a configurable reduction from the destination current temperature. Enter one value in the next step. Delta 0 sets the target equal to the measured temperature; the device still decides whether it needs heat.",
         "data": {
           "destination_entity": "Destination thermostat",
           "destination_target": "Destination target to control",
-          "idle_temperature": "Idle temperature (°C)",
           "max_setpoint": "Maximum setpoint (°C)",
           "rounding_mode": "Setpoint rounding step",
-          "rounding_direction": "Rounding direction"
+          "rounding_direction": "Rounding direction",
+          "idle_mode": "Setback mode"
         }
       },
       "control": {
-        "title": "ClimateSync – Step 4 of 4: Demand & safeguards",
+        "title": "ClimateSync – Step 5 of 5: Demand & safeguards",
         "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** is inclusive: exactly this difference is sent, while identical targets are skipped. It does not decide whether demand is active. Resync recovers missed events and the minimum send interval rate-limits writes.",
         "data": {
           "resync_interval_seconds": "Resync interval (seconds)",
@@ -37,6 +37,20 @@
           "demand_activation_threshold": "Demand activation threshold (°C)",
           "demand_deactivation_threshold": "Demand deactivation threshold (°C)",
           "min_send_interval_seconds": "Minimum send interval (seconds)"
+        }
+      },
+      "setback_target": {
+        "title": "ClimateSync – Step 4 of 5: Fixed idle target",
+        "description": "Fixed target when demand is inactive. For example, 10 always means 10 °C. Limits follow the destination and configured safety ceiling. Input step: 0.5 °C.",
+        "data": {
+          "idle_value": "Idle target (°C)"
+        }
+      },
+      "setback_delta": {
+        "title": "ClimateSync – Step 4 of 5: Relative idle setback",
+        "description": "Idle target = current destination temperature − setback. At 20.7 °C, 10 gives 10.7 °C and 0 gives 20.7 °C. Minimum: 0; input step: 0.5 °C. The result stays within destination limits. If current temperature is missing, the device minimum is used. Delta 0 does not guarantee zero device heat demand.",
+        "data": {
+          "idle_value": "Idle setback (°C)"
         }
       }
     },
@@ -47,13 +61,16 @@
       "no_destination": "Please select a destination thermostat.",
       "dest_is_source": "The destination thermostat cannot also be a source room.",
       "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold.",
-      "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target."
+      "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target.",
+      "invalid_idle_mode": "Choose a valid setback mode.",
+      "invalid_idle_value": "Enter a finite value within the allowed limits.",
+      "destination_limits_unavailable": "Destination limits are missing or conflict with the maximum setpoint. Check the destination."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "ClimateSync – Step 1 of 4: Heating sources",
+        "title": "ClimateSync – Step 1 of 5: Heating sources",
         "description": "Choose climate sources, delta sensors, or a mixture. Climates contribute target minus current temperature; delta sensors supply an already calculated heating gap in **°C**, not a room temperature or a percentage. The highest positive delta controls the destination, never the sum. Missing or invalid sources contribute **0** while healthy sources continue. Select at least one source across both fields. When moving a room to a delta sensor, remove its old climate sources so they cannot overrule it. Removing a source also removes it from the selectable primary subset. No room switches automatically.",
         "data": {
           "source_entities": "Source climate entities",
@@ -61,26 +78,26 @@
         }
       },
       "primary_sources": {
-        "title": "ClimateSync – Step 2 of 4: Primary sources",
+        "title": "ClimateSync – Step 2 of 5: Primary sources",
         "description": "Select the rooms that may enable other rooms to piggyback on an existing heating run. The **Primary Heating Demand Active** entity uses only this subset and the same hysteresis as general demand. Secondary sources still contribute to general demand but never to primary demand.",
         "data": {
           "primary_source_entities": "Primary sources (climates and delta sensors)"
         }
       },
       "destination": {
-        "title": "ClimateSync – Step 3 of 4: Destination setpoint",
-        "description": "Choose the destination thermostat and setpoint behaviour. For a heating-range climate, select **Lower target temperature**; ClimateSync preserves the current upper target in the same action. Idle withdraws demand, and the maximum setpoint remains a hard ceiling.",
+        "title": "ClimateSync – Step 3 of 5: Destination setpoint",
+        "description": "Choose the destination thermostat and setpoint behaviour. For a heating-range climate, select **Lower target temperature**; ClimateSync preserves the current upper target in the same action. The maximum setpoint remains a hard ceiling.\n\n**Setback target** uses a fixed idle temperature. **Setback delta** subtracts a configurable reduction from the destination current temperature. Enter one value in the next step. Delta 0 sets the target equal to the measured temperature; the device still decides whether it needs heat.",
         "data": {
           "destination_entity": "Destination thermostat",
           "destination_target": "Destination target to control",
-          "idle_temperature": "Idle temperature (°C)",
           "max_setpoint": "Maximum setpoint (°C)",
           "rounding_mode": "Setpoint rounding step",
-          "rounding_direction": "Rounding direction"
+          "rounding_direction": "Rounding direction",
+          "idle_mode": "Setback mode"
         }
       },
       "control": {
-        "title": "ClimateSync – Step 4 of 4: Demand & safeguards",
+        "title": "ClimateSync – Step 5 of 5: Demand & safeguards",
         "description": "The activation and deactivation thresholds form one hysteresis band for both demand entities: demand starts at the higher value and remains active until it reaches the lower value. **Minimum change** is inclusive: exactly this difference is sent, while identical targets are skipped. It does not decide whether demand is active. Resync recovers missed events and the minimum send interval rate-limits writes.",
         "data": {
           "resync_interval_seconds": "Resync interval (seconds)",
@@ -88,6 +105,20 @@
           "demand_activation_threshold": "Demand activation threshold (°C)",
           "demand_deactivation_threshold": "Demand deactivation threshold (°C)",
           "min_send_interval_seconds": "Minimum send interval (seconds)"
+        }
+      },
+      "setback_target": {
+        "title": "ClimateSync – Step 4 of 5: Fixed idle target",
+        "description": "Fixed target when demand is inactive. For example, 10 always means 10 °C. Limits follow the destination and configured safety ceiling. Input step: 0.5 °C.",
+        "data": {
+          "idle_value": "Idle target (°C)"
+        }
+      },
+      "setback_delta": {
+        "title": "ClimateSync – Step 4 of 5: Relative idle setback",
+        "description": "Idle target = current destination temperature − setback. At 20.7 °C, 10 gives 10.7 °C and 0 gives 20.7 °C. Minimum: 0; input step: 0.5 °C. The result stays within destination limits. If current temperature is missing, the device minimum is used. Delta 0 does not guarantee zero device heat demand.",
+        "data": {
+          "idle_value": "Idle setback (°C)"
         }
       }
     },
@@ -98,7 +129,10 @@
       "no_destination": "Please select a destination thermostat.",
       "dest_is_source": "The destination thermostat cannot also be a source room.",
       "demand_threshold_order": "The deactivation threshold must be lower than the activation threshold.",
-      "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target."
+      "destination_target_unsupported": "The selected destination does not currently expose the chosen target. A lower target also requires a valid upper target.",
+      "invalid_idle_mode": "Choose a valid setback mode.",
+      "invalid_idle_value": "Enter a finite value within the allowed limits.",
+      "destination_limits_unavailable": "Destination limits are missing or conflict with the maximum setpoint. Check the destination."
     }
   },
   "selector": {
@@ -120,6 +154,12 @@
       "options": {
         "temperature": "Target temperature (default)",
         "target_temp_low": "Lower target temperature (heating range)"
+      }
+    },
+    "idle_mode": {
+      "options": {
+        "target": "Setback target — fixed idle target",
+        "delta": "Setback delta — relative idle setback"
       }
     }
   }

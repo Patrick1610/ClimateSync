@@ -243,6 +243,11 @@ class DestinationSetpointSensor(_ClimateSyncBaseSensor):
             "rounded_setpoint": rounded_setpoint,
             "final_setpoint": self._coordinator.computed_setpoint,
             "idle_temperature": self._coordinator.idle_temperature,
+            "idle_mode": self._coordinator.idle_mode,
+            "idle_value": self._coordinator.idle_value,
+            "idle_setpoint": self._coordinator.idle_setpoint,
+            "idle_setpoint_stage": "before_rounding_and_limits",
+            "idle_fallback_active": self._coordinator.idle_fallback_active,
         }
 
 

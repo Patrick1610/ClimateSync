@@ -32,6 +32,8 @@ def _coordinator_diagnostics(
             "destination_entity": coordinator.destination_entity,
             "destination_target": coordinator.destination_target,
             "idle_temperature": coordinator.idle_temperature,
+            "idle_mode": coordinator.idle_mode,
+            "idle_value": coordinator.idle_value,
             "maximum_setpoint": coordinator.max_setpoint,
             "rounding_mode": coordinator.rounding_mode,
             "rounding_direction": coordinator.rounding_direction,
@@ -71,6 +73,9 @@ def _coordinator_diagnostics(
             "paired_target": coordinator.destination_paired_target,
         },
         "setpoint": {
+            "idle_setpoint": coordinator.idle_setpoint,
+            "idle_setpoint_stage": "before_rounding_and_limits",
+            "idle_fallback_active": coordinator.idle_fallback_active,
             "raw": coordinator.raw_setpoint,
             "rounded": coordinator.rounded_setpoint,
             "final": coordinator.computed_setpoint,

@@ -75,7 +75,8 @@ def _flow(module, options=False, data=None):
         flow = module.ClimateSyncConfigFlow()
     flow.hass = MagicMock()
     flow.hass.states.get.return_value = SimpleNamespace(
-        state="heat", attributes={"temperature": 20.0}
+        state="heat",
+        attributes={"temperature": 20.0, "min_temp": 5.0, "max_temp": 35.0},
     )
     return flow
 
@@ -120,6 +121,8 @@ async def test_setup_and_options_roundtrip_both_source_types(
             "rounding_direction": "nearest",
         }
     )
+    assert result["step_id"] == "setback_target"
+    result = await flow.async_step_setback_target({"idle_value": 5})
     assert result["step_id"] == "control"
     assert result["last_step"] is True
     result = await flow.async_step_control(
@@ -260,3 +263,120 @@ def test_setup_and_options_describe_delta_input_contract(language):
         assert "delta_source_entities" in source_step["data"]
         assert "°C" in source_step["description"]
         assert "**0**" in source_step["description"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [False, True])
+@pytest.mark.parametrize(
+    "mode,value,step,minimum",
+    [
+        ("target", 5, "setback_target", 5),
+        ("delta", 0, "setback_delta", 0),
+        ("delta", 10, "setback_delta", 0),
+    ],
+)
+async def test_mode_dependent_single_numeric_field(
+    flow_module, options, mode, value, step, minimum
+):
+    flow = _flow(flow_module, options)
+    result = await flow.async_step_destination(
+        {
+            "destination_entity": "climate.emma",
+            "idle_mode": mode,
+            "max_setpoint": 35,
+            "rounding_mode": "1_decimal",
+        }
+    )
+    assert result["step_id"] == step
+    schema = result["data_schema"].schema
+    assert len(schema) == 1
+    key, selector = next(iter(schema.items()))
+    assert str(key) == "idle_value"
+    assert selector.config["number"]["min"] == minimum
+    assert selector.config["number"]["step"] == 0.5
+    result = await getattr(flow, f"async_step_{step}")({"idle_value": value})
+    assert result["step_id"] == "control"
+    assert flow._destination_settings["idle_mode"] == mode
+    assert flow._destination_settings["idle_value"] == value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,value",
+    [
+        ("target", 4.5),
+        ("target", 36),
+        ("delta", -0.5),
+        ("delta", float("nan")),
+        ("target", float("inf")),
+    ],
+)
+async def test_setback_rejects_out_of_range_and_nonfinite(flow_module, mode, value):
+    flow = _flow(flow_module)
+    await flow.async_step_destination(
+        {
+            "destination_entity": "climate.emma",
+            "idle_mode": mode,
+            "max_setpoint": 35,
+            "rounding_mode": "1_decimal",
+        }
+    )
+    result = await flow._async_step_setback({"idle_value": value})
+    assert result["errors"] == {"idle_value": "invalid_idle_value"}
+
+
+@pytest.mark.asyncio
+async def test_mode_switch_does_not_reinterpret_old_absolute_value_as_delta(
+    flow_module,
+):
+    flow = _flow(flow_module, options=True, data={"idle_temperature": 10})
+    result = await flow.async_step_destination(
+        {
+            "destination_entity": "climate.emma",
+            "idle_mode": "delta",
+            "max_setpoint": 35,
+            "rounding_mode": "1_decimal",
+        }
+    )
+    key = next(iter(result["data_schema"].schema))
+    assert key.default() == 0
+
+
+@pytest.mark.asyncio
+async def test_target_uses_actual_destination_minimum(flow_module):
+    flow = _flow(flow_module)
+    flow.hass.states.get.return_value.attributes.update(min_temp=12, max_temp=30)
+    result = await flow.async_step_destination(
+        {
+            "destination_entity": "climate.emma",
+            "idle_mode": "target",
+            "max_setpoint": 35,
+            "rounding_mode": "1_decimal",
+        }
+    )
+    selector = next(iter(result["data_schema"].schema.values()))
+    assert selector.config["number"]["min"] == 12
+    assert selector.config["number"]["max"] == 30
+    result = await flow.async_step_setback_target({"idle_value": 10})
+    assert result["errors"] == {"idle_value": "invalid_idle_value"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [False, True])
+async def test_missing_device_limits_block_numeric_step_without_saving(
+    flow_module, options
+):
+    flow = _flow(flow_module, options)
+    flow.hass.states.get.return_value.attributes = {"temperature": 20}
+    result = await flow.async_step_destination(
+        {
+            "destination_entity": "climate.emma",
+            "idle_mode": "target",
+            "max_setpoint": 35,
+            "rounding_mode": "1_decimal",
+        }
+    )
+    assert result["errors"] == {"base": "destination_limits_unavailable"}
+    result = await flow.async_step_setback_target({"idle_value": 5})
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "destination_limits_unavailable"}

@@ -5,6 +5,18 @@
 
 > **Developed with Plugwise Emma in mind. Mix source climates (`current_temperature` and `temperature`) with numerical heating-demand delta sensors in °C. Destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.4.0
+
+Choose **Setback target** (fixed idle temperature) or **Setback delta**
+(current destination temperature minus setback), followed by one numeric field
+with a 0.5 °C input step. Delta accepts zero. Target uses the destination minimum;
+all computed targets respect the destination limits and configured maximum.
+When relative mode lacks a current temperature, it falls back to the advertised
+minimum and exposes that fallback in diagnostics. Delta 0 is a target equal to
+current temperature, not a command guaranteeing zero boiler demand.
+Existing installations migrate to fixed target mode with their effective value
+unchanged. Sources, hysteresis and update safeguards are preserved.
+
 ## Release 1.3.2
 
 The minimum destination change is inclusive: a configured 0.1 °C change sends
@@ -36,7 +48,7 @@ Demand Active** follows all configured sources, while **Primary Heating Demand
 Active** follows only the user-selected primary subset. Both use the exact same
 configured activation and deactivation thresholds; the primary scope does not
 change destination control. The setup and options flows are now a documented
-four-step wizard with Next buttons between steps and Submit only on the final
+five-step wizard with Next buttons between steps and Submit only on the final
 step.
 
 ## Release 1.2.5
@@ -168,12 +180,23 @@ so the upgrade does not silently narrow their demand scope.
 |---|---|---|
 | Destination climate entity | — | The thermostat that ClimateSync will control. |
 | Destination target | Target temperature | Select ordinary `temperature` or lower target `target_temp_low` for a heating range climate. |
-| Idle temperature | 5.0 °C | Target temperature sent to the destination when no room has a positive delta (all rooms are at or above their target). |
+| Setback mode | Setback target | Fixed idle target, or current destination temperature minus a non-negative setback. |
 | Maximum setpoint | 35.0 °C | Hard ceiling for the destination setpoint. |
 | Rounding mode | 1 decimal | Step size used for the computed setpoint. |
 | Rounding direction | nearest | Whether the computed setpoint is rounded down, normally, or up within the selected rounding mode. |
 
-### Step 4 — Demand & safeguards
+### Step 4 — One idle value
+
+In **Setback target** mode, enter the fixed idle target (default 5 °C, bounded
+by the selected destination's minimum/maximum and configured ceiling).
+In **Setback delta** mode, enter the reduction (minimum 0 °C, default 0).
+Both use a 0.5 °C input step. At a measured 20.7 °C, setback 10 requests
+10.7 °C and setback 0 requests 20.7 °C, before rounding and device limits.
+A zero delta does not guarantee zero device heat demand. If the relative mode
+has no valid current reading, ClimateSync requests the device minimum; if even
+that is unavailable it reports destination unavailable without sending an invalid target.
+
+### Step 5 — Demand & safeguards
 
 | Option | Default | Description |
 |---|---|---|
@@ -186,13 +209,14 @@ so the upgrade does not silently narrow their demand scope.
 ### Options Flow — reconfigure everything via the settings gear
 
 After setup, open the integration → **Configure** (⚙ gear icon) to get the same
-four-step wizard again. Intermediate steps show **Next**; only the final step
+five-step wizard again. Intermediate steps show **Next**; only the final step
 shows **Submit**. You can change:
 
 - **Step 1**: add or remove source rooms;
 - **Step 2**: choose the primary subset;
 - **Step 3**: change destination and setpoint behaviour;
-- **Step 4**: change hysteresis, resync, anti-flap, and rate limiting.
+- **Step 4**: set the fixed target or relative setback;
+- **Step 5**: change hysteresis, resync, anti-flap, and rate limiting.
 
 | Option | Default | Description |
 |---|---|---|
@@ -230,7 +254,7 @@ For each selected numerical delta sensor:
         source is usable; delta = max(numeric state, 0)
 
 If no usable source remains:
-    apply idle_temperature to withdraw prior heating demand
+    apply the configured idle policy instead of the previous active demand
 
 delta_max = max(all room deltas)
 
@@ -244,7 +268,7 @@ Apply the same activation/deactivation hysteresis independently to
 primary_delta_max to calculate primary_demand_active
 
 If demand is inactive:
-    setpoint_raw = idle_temperature        # No room needs heating
+    setpoint_raw = idle_value if idle_mode == target else destination_current_temperature - idle_value
 Else:
     setpoint_raw = destination_current_temperature + delta_max
     # The destination target is set to its own current temperature
@@ -352,7 +376,10 @@ thresholds, source list, and source-health diagnostics as attributes.
 | `raw_setpoint` | Unrounded `destination_current_temperature + delta_max`, or idle temperature when no room needs heating |
 | `rounded_setpoint` | Raw setpoint after rounding mode and rounding direction |
 | `final_setpoint` | Final setpoint after rounding and maximum-setpoint clamp |
-| `idle_temperature` | Configured idle temperature |
+| `idle_temperature` | Absolute idle temperature (legacy attribute) |
+| `idle_mode` / `idle_value` | Configured fixed target or relative reduction |
+| `idle_setpoint` | Calculated absolute idle target before rounding and limits |
+| `idle_fallback_active` | Relative mode lacks current temperature and uses the device minimum |
 
 **State**: the final setpoint that ClimateSync wants to apply (`destination_current_temperature + delta_max`, rounded and capped by maximum setpoint).
 

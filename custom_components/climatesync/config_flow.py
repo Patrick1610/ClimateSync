@@ -17,7 +17,9 @@ from .const import (
     CONF_DEMAND_DEACTIVATION_THRESHOLD,
     CONF_DESTINATION_ENTITY,
     CONF_DESTINATION_TARGET,
+    CONF_IDLE_MODE,
     CONF_IDLE_TEMPERATURE,
+    CONF_IDLE_VALUE,
     CONF_MAX_SETPOINT,
     CONF_MIN_CHANGE_THRESHOLD,
     CONF_MIN_SEND_INTERVAL,
@@ -41,9 +43,13 @@ from .const import (
     DESTINATION_TARGET_TEMPERATURE,
     DESTINATION_TARGETS,
     DOMAIN,
+    IDLE_MODE_DELTA,
+    IDLE_MODE_TARGET,
+    IDLE_MODES,
     ROUNDING_DIRECTIONS,
     ROUNDING_MODES,
 )
+from .setback import destination_limits, finite_temperature
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared helpers
@@ -116,7 +122,7 @@ def _primary_sources_schema(
 def _destination_schema(
     default_dest: str | None = None,
     default_destination_target: str = DEFAULT_DESTINATION_TARGET,
-    default_idle: float = DEFAULT_IDLE_TEMPERATURE,
+    default_idle_mode: str = IDLE_MODE_TARGET,
     default_max_setpoint: float = DEFAULT_MAX_SETPOINT,
     default_rounding: str = DEFAULT_ROUNDING_MODE,
     default_rounding_direction: str = DEFAULT_ROUNDING_DIRECTION,
@@ -146,16 +152,11 @@ def _destination_schema(
                     }
                 }
             ),
-            vol.Required(
-                CONF_IDLE_TEMPERATURE, default=default_idle
-            ): selector.selector(
+            vol.Required(CONF_IDLE_MODE, default=default_idle_mode): selector.selector(
                 {
-                    "number": {
-                        "min": -10.0,
-                        "max": 25.0,
-                        "step": 0.5,
-                        "mode": "box",
-                        "unit_of_measurement": "°C",
+                    "select": {
+                        "options": list(IDLE_MODES),
+                        "translation_key": "idle_mode",
                     }
                 }
             ),
@@ -325,14 +326,90 @@ def _destination_supports_target(state: Any, target: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Initial config flow (4 steps)
+# Initial config flow (5 steps)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class _SetbackFlow:
+    """Shared mode-dependent numeric step for setup and options."""
+
+    async def _async_step_setback(self, user_input=None):
+        mode = self._destination_settings[CONF_IDLE_MODE]
+        state = self.hass.states.get(
+            self._destination_settings[CONF_DESTINATION_ENTITY]
+        )
+        minimum, maximum = destination_limits(state.attributes if state else {})
+        ceiling = float(self._destination_settings[CONF_MAX_SETPOINT])
+        if maximum is not None:
+            ceiling = min(ceiling, maximum)
+        if (
+            self._destination_settings[CONF_DESTINATION_TARGET]
+            == DESTINATION_TARGET_LOW
+            and state is not None
+        ):
+            paired = finite_temperature(state.attributes.get(DESTINATION_TARGET_HIGH))
+            if paired is not None:
+                ceiling = min(ceiling, paired)
+        errors = {}
+        lower = 0.0 if mode == IDLE_MODE_DELTA else minimum
+        if minimum is None or maximum is None or minimum > ceiling:
+            errors["base"] = "destination_limits_unavailable"
+        elif user_input is not None:
+            value = finite_temperature(user_input.get(CONF_IDLE_VALUE))
+            if (
+                value is None
+                or value < lower
+                or (mode == IDLE_MODE_TARGET and value > ceiling)
+            ):
+                errors[CONF_IDLE_VALUE] = "invalid_idle_value"
+            else:
+                self._destination_settings[CONF_IDLE_VALUE] = value
+                return await self.async_step_control()
+
+        stored_mode = self._get(CONF_IDLE_MODE, IDLE_MODE_TARGET)
+        if mode == stored_mode:
+            default = self._get(
+                CONF_IDLE_VALUE,
+                self._get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+            )
+        else:
+            default = 0.0 if mode == IDLE_MODE_DELTA else DEFAULT_IDLE_TEMPERATURE
+        if mode == IDLE_MODE_TARGET and minimum is not None and minimum <= ceiling:
+            default = max(minimum, min(default, ceiling))
+        number = {
+            "min": lower if lower is not None else DEFAULT_IDLE_TEMPERATURE,
+            "step": 0.5,
+            "mode": "box",
+            "unit_of_measurement": "°C",
+        }
+        if mode == IDLE_MODE_TARGET:
+            number["max"] = ceiling
+        return self.async_show_form(
+            step_id="setback_delta" if mode == IDLE_MODE_DELTA else "setback_target",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_IDLE_VALUE, default=default): selector.selector(
+                        {"number": number}
+                    )
+                }
+            ),
+            errors=errors,
+            last_step=False,
+        )
+
+    async def async_step_setback_target(self, user_input=None):
+        """Enter the fixed idle temperature."""
+        return await self._async_step_setback(user_input)
+
+    async def async_step_setback_delta(self, user_input=None):
+        """Enter the non-negative idle temperature reduction."""
+        return await self._async_step_setback(user_input)
+
+
+class ClimateSyncConfigFlow(_SetbackFlow, config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the config flow for ClimateSync."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         """Initialise config flow."""
@@ -340,6 +417,10 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._delta_source_entities: list[str] = []
         self._primary_source_entities: list[str] = []
         self._destination_settings: dict[str, Any] = {}
+
+    def _get(self, key: str, default: Any) -> Any:
+        """New installations have no previously stored values."""
+        return default
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -405,6 +486,8 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif user_input.get(CONF_IDLE_MODE, IDLE_MODE_TARGET) not in IDLE_MODES:
+                errors[CONF_IDLE_MODE] = "invalid_idle_mode"
             elif not _destination_supports_target(
                 self.hass.states.get(dest), destination_target
             ):
@@ -413,14 +496,14 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._destination_settings = {
                     CONF_DESTINATION_ENTITY: dest,
                     CONF_DESTINATION_TARGET: destination_target,
-                    CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
+                    CONF_IDLE_MODE: user_input.get(CONF_IDLE_MODE, IDLE_MODE_TARGET),
                     CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                     CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
                     CONF_ROUNDING_DIRECTION: _normalize_rounding_direction(
                         user_input.get(CONF_ROUNDING_DIRECTION)
                     ),
                 }
-                return await self.async_step_control()
+                return await self._async_step_setback()
 
         return self.async_show_form(
             step_id="destination",
@@ -432,7 +515,7 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_control(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 4: configure demand hysteresis and update safeguards."""
+        """Step 5: configure demand hysteresis and update safeguards."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -480,12 +563,12 @@ class ClimateSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Options flow – same 4-step wizard as initial setup
+# Options flow – same 5-step wizard as initial setup
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
-    """Options flow: mirrors the 4-step setup wizard."""
+class ClimateSyncOptionsFlow(_SetbackFlow, config_entries.OptionsFlow):
+    """Options flow: mirrors the 5-step setup wizard."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialise options flow."""
@@ -545,9 +628,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 self._primary_source_entities = primary_sources
                 return await self.async_step_destination()
 
-        configured_primary = list(
-            self._get(CONF_PRIMARY_SOURCE_ENTITIES, all_sources)
-        )
+        configured_primary = list(self._get(CONF_PRIMARY_SOURCE_ENTITIES, all_sources))
         current_primary = [
             source for source in configured_primary if source in all_sources
         ]
@@ -578,6 +659,8 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_DESTINATION_ENTITY] = "dest_is_source"
             elif not dest:
                 errors[CONF_DESTINATION_ENTITY] = "no_destination"
+            elif user_input.get(CONF_IDLE_MODE, IDLE_MODE_TARGET) not in IDLE_MODES:
+                errors[CONF_IDLE_MODE] = "invalid_idle_mode"
             elif not _destination_supports_target(
                 self.hass.states.get(dest), destination_target
             ):
@@ -586,14 +669,14 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 self._destination_settings = {
                     CONF_DESTINATION_ENTITY: dest,
                     CONF_DESTINATION_TARGET: destination_target,
-                    CONF_IDLE_TEMPERATURE: user_input[CONF_IDLE_TEMPERATURE],
+                    CONF_IDLE_MODE: user_input.get(CONF_IDLE_MODE, IDLE_MODE_TARGET),
                     CONF_MAX_SETPOINT: user_input[CONF_MAX_SETPOINT],
                     CONF_ROUNDING_MODE: user_input[CONF_ROUNDING_MODE],
                     CONF_ROUNDING_DIRECTION: _normalize_rounding_direction(
                         user_input.get(CONF_ROUNDING_DIRECTION)
                     ),
                 }
-                return await self.async_step_control()
+                return await self._async_step_setback()
 
         return self.async_show_form(
             step_id="destination",
@@ -602,7 +685,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
                 default_destination_target=_normalize_destination_target(
                     self._get(CONF_DESTINATION_TARGET, DEFAULT_DESTINATION_TARGET)
                 ),
-                default_idle=self._get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE),
+                default_idle_mode=self._get(CONF_IDLE_MODE, IDLE_MODE_TARGET),
                 default_max_setpoint=self._get(CONF_MAX_SETPOINT, DEFAULT_MAX_SETPOINT),
                 default_rounding=self._get(CONF_ROUNDING_MODE, DEFAULT_ROUNDING_MODE),
                 default_rounding_direction=_normalize_rounding_direction(
@@ -616,7 +699,7 @@ class ClimateSyncOptionsFlow(config_entries.OptionsFlow):
     async def async_step_control(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 4 (re-configure): control behaviour and safeguards."""
+        """Step 5 (re-configure): control behaviour and safeguards."""
         errors: dict[str, str] = {}
 
         if user_input is not None:

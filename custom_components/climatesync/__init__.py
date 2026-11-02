@@ -1,4 +1,5 @@
 """ClimateSync integration setup."""
+
 from __future__ import annotations
 
 import logging
@@ -7,7 +8,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .const import CONF_PRIMARY_SOURCE_ENTITIES, CONF_SOURCE_ENTITIES, DOMAIN
+from .const import (
+    CONF_IDLE_MODE,
+    CONF_IDLE_TEMPERATURE,
+    CONF_IDLE_VALUE,
+    CONF_PRIMARY_SOURCE_ENTITIES,
+    CONF_SOURCE_ENTITIES,
+    DEFAULT_IDLE_TEMPERATURE,
+    DOMAIN,
+    IDLE_MODE_TARGET,
+)
 from .coordinator import ClimateSyncCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +41,20 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "Migrated ClimateSync entry %s to version 2; all existing sources "
             "remain primary until changed in Configure",
             entry.entry_id,
+        )
+
+    if entry.version == 2:
+        # Preserve options-over-data precedence, including an existing zero value.
+        data = dict(entry.data)
+        options = dict(entry.options)
+        data.setdefault(CONF_IDLE_MODE, IDLE_MODE_TARGET)
+        data.setdefault(
+            CONF_IDLE_VALUE, data.get(CONF_IDLE_TEMPERATURE, DEFAULT_IDLE_TEMPERATURE)
+        )
+        if CONF_IDLE_TEMPERATURE in options:
+            options.setdefault(CONF_IDLE_VALUE, options[CONF_IDLE_TEMPERATURE])
+        hass.config_entries.async_update_entry(
+            entry, data=data, options=options, version=3
         )
 
     return True

@@ -202,30 +202,40 @@ async def test_mixed_sources_use_maximum_not_sum(sensor_delta):
     coord, hass = _build_coordinator(
         delta_source_entities=["sensor.pi_delta"], rounding_mode=ROUNDING_MODE_2DEC
     )
-    _configure_states(hass, {
-        "climate.room1": _make_state(19.6, 20.0),
-        "sensor.pi_delta": _delta_state(sensor_delta),
-        "climate.dest": _make_state(20.0, 5.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(19.6, 20.0),
+            "sensor.pi_delta": _delta_state(sensor_delta),
+            "climate.dest": _make_state(20.0, 5.0),
+        },
+    )
     await coord._async_evaluate()
     expected = max(0.4, float(sensor_delta))
     assert coord.delta_max == pytest.approx(expected)
     assert coord.raw_setpoint == pytest.approx(20 + expected)
-    assert coord.leading_room == ("sensor.pi_delta" if float(sensor_delta) > 0.4 else "climate.room1")
+    assert coord.leading_room == (
+        "sensor.pi_delta" if float(sensor_delta) > 0.4 else "climate.room1"
+    )
     assert coord.usable_source_count == 2
     assert coord.room_deltas["sensor.pi_delta"]["current"] is None
     assert coord.room_deltas["sensor.pi_delta"]["target"] is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("value", [None, "unknown", "unavailable", "", "oops", "nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "value", [None, "unknown", "unavailable", "", "oops", "nan", "inf", "-inf"]
+)
 async def test_bad_delta_contributes_zero_without_blocking_climate(value):
     coord, hass = _build_coordinator(delta_source_entities=["sensor.pi_delta"])
-    _configure_states(hass, {
-        "climate.room1": _make_state(19.0, 20.0),
-        "sensor.pi_delta": None if value is None else _delta_state(value),
-        "climate.dest": _make_state(20.0, 5.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(19.0, 20.0),
+            "sensor.pi_delta": None if value is None else _delta_state(value),
+            "climate.dest": _make_state(20.0, 5.0),
+        },
+    )
     await coord._async_evaluate()
     assert coord.delta_max == 1.0
     assert coord.raw_setpoint == 21.0
@@ -240,11 +250,14 @@ async def test_bad_delta_contributes_zero_without_blocking_climate(value):
 @pytest.mark.parametrize("unit", [None, "%", "°F", "K"])
 async def test_wrong_delta_unit_is_zero_not_room_temperature_or_percentage(unit):
     coord, hass = _build_coordinator(delta_source_entities=["sensor.pi_delta"])
-    _configure_states(hass, {
-        "climate.room1": _make_state(19.0, 20.0),
-        "sensor.pi_delta": _delta_state("90", unit),
-        "climate.dest": _make_state(20.0, 5.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "climate.room1": _make_state(19.0, 20.0),
+            "sensor.pi_delta": _delta_state("90", unit),
+            "climate.dest": _make_state(20.0, 5.0),
+        },
+    )
     await coord._async_evaluate()
     assert coord.delta_max == 1
     assert coord.room_deltas["sensor.pi_delta"]["source_status"] == "invalid_delta_unit"
@@ -252,14 +265,19 @@ async def test_wrong_delta_unit_is_zero_not_room_temperature_or_percentage(unit)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value, expected", [("0", 0), ("-0.5", 0), ("0.45", 0.45)])
-async def test_sensor_only_configuration_accepts_zero_and_clamps_negative(value, expected):
+async def test_sensor_only_configuration_accepts_zero_and_clamps_negative(
+    value, expected
+):
     coord, hass = _build_coordinator(
         source_entities=[], delta_source_entities=["sensor.pi_delta"]
     )
-    _configure_states(hass, {
-        "sensor.pi_delta": _delta_state(value),
-        "climate.dest": _make_state(20.0, 21.0),
-    })
+    _configure_states(
+        hass,
+        {
+            "sensor.pi_delta": _delta_state(value),
+            "climate.dest": _make_state(20.0, 21.0),
+        },
+    )
     await coord._async_evaluate()
     assert coord.delta_max == expected
     assert coord.usable_source_count == 1
@@ -300,7 +318,13 @@ async def test_delta_sensor_primary_scope_and_existing_hysteresis():
         "climate.dest": _make_state(20.0, 21.0),
     }
     _configure_states(hass, states)
-    for value, primary_active in [("0.09", False), ("0.1", True), ("0.05", True), ("0", False), ("nan", False)]:
+    for value, primary_active in [
+        ("0.09", False),
+        ("0.1", True),
+        ("0.05", True),
+        ("0", False),
+        ("nan", False),
+    ]:
         states["sensor.pi_delta"] = _delta_state(value)
         await coord._async_evaluate()
         assert coord.demand_active is True
@@ -317,12 +341,18 @@ def test_apply_options_preserves_legacy_selection_and_watches_mixed_sources():
     assert CONF_DELTA_SOURCE_ENTITIES not in coord.entry.data
     coord.entry.options[CONF_DELTA_SOURCE_ENTITIES] = ["sensor.pi_delta"]
     coord.entry.options[CONF_PRIMARY_SOURCE_ENTITIES] = ["sensor.pi_delta"]
-    with patch("custom_components.climatesync.coordinator.async_track_state_change_event") as track:
+    with patch(
+        "custom_components.climatesync.coordinator.async_track_state_change_event"
+    ) as track:
         coord.async_apply_options()
     assert coord.source_entities == ["climate.room1", "sensor.pi_delta"]
     assert coord.delta_source_entities == ["sensor.pi_delta"]
     assert coord.primary_source_entities == ["sensor.pi_delta"]
-    assert track.call_args.args[1] == ["climate.room1", "sensor.pi_delta", "climate.dest"]
+    assert track.call_args.args[1] == [
+        "climate.room1",
+        "sensor.pi_delta",
+        "climate.dest",
+    ]
 
 
 def test_numeric_sensor_state_change_is_relevant():
@@ -798,7 +828,9 @@ async def test_minimum_destination_change_is_inclusive(
     _configure_states(
         hass,
         {
-            "climate.room1": _make_state(current_temperature=20.0, target_temperature=22.0),
+            "climate.room1": _make_state(
+                current_temperature=20.0, target_temperature=22.0
+            ),
             "climate.dest": _make_state(
                 current_temperature=20.0, target_temperature=current_target
             ),
@@ -1848,3 +1880,121 @@ async def test_rate_limit_still_applies_for_source_triggered_evaluation():
     hass.services.async_call.assert_not_called()
     assert coord.skipped_rate_limit == 1
     assert coord.status == STATUS_RATE_LIMITED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setback,expected", [(0, 20.7), (10, 10.7), (30, 5)])
+async def test_relative_idle_target_follows_current_and_respects_device_minimum(
+    setback, expected
+):
+    coord, hass = _build_coordinator(idle_temperature=setback)
+    coord._idle_mode = "delta"
+    dest = _make_state(20.7, 25)
+    dest.attributes.update(min_temp=5, max_temp=35)
+    _configure_states(
+        hass, {"climate.room1": _make_state(20, 19), "climate.dest": dest}
+    )
+    await coord._async_evaluate()
+    assert not coord.demand_active
+    assert coord.computed_setpoint == expected
+    assert hass.services.async_call.call_args.args[2]["temperature"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current", [None, float("nan"), float("inf")])
+async def test_relative_idle_missing_current_withdraws_stale_demand_to_device_minimum(
+    current,
+):
+    coord, hass = _build_coordinator(idle_temperature=0)
+    coord._idle_mode = "delta"
+    dest = _make_state(current, 25)
+    dest.attributes.update(min_temp=5, max_temp=35)
+    _configure_states(hass, {"climate.dest": dest})
+    await coord._async_evaluate()
+    assert coord.computed_setpoint == 5
+    assert coord.idle_fallback_active
+    assert hass.services.async_call.call_args.args[2]["temperature"] == 5
+
+
+@pytest.mark.asyncio
+async def test_delta_zero_returns_to_current_after_run_then_tracks_room_measurement():
+    coord, hass = _build_coordinator(idle_temperature=0)
+    coord._idle_mode = "delta"
+    room = _make_state(19, 20)
+    dest = _make_state(20.7, 10)
+    dest.attributes.update(min_temp=5, max_temp=35)
+    _configure_states(hass, {"climate.room1": room, "climate.dest": dest})
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert coord.computed_setpoint == 21.7
+    room.attributes["temperature"] = 18
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert coord.computed_setpoint == 20.7
+    dest.attributes["current_temperature"] = 20.8
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert coord.computed_setpoint == 20.8
+    assert coord.idle_value == 0
+
+
+@pytest.mark.asyncio
+async def test_relative_idle_range_preserves_upper_target_and_clamps_lower():
+    coord, hass = _build_coordinator(
+        idle_temperature=0, destination_target=DESTINATION_TARGET_LOW
+    )
+    coord._idle_mode = "delta"
+    dest = _make_state(20.7, None, target_temp_low=10, target_temp_high=20)
+    dest.attributes.update(min_temp=5, max_temp=35)
+    _configure_states(
+        hass, {"climate.room1": _make_state(20, 19), "climate.dest": dest}
+    )
+    await coord._async_evaluate()
+    assert coord.computed_setpoint == 20
+    assert hass.services.async_call.call_args.args[2] == {
+        "entity_id": "climate.dest",
+        "target_temp_low": 20,
+        "target_temp_high": 20,
+    }
+
+
+def test_new_options_zero_overrides_legacy_idle_and_survives_reload():
+    coord, hass = _build_coordinator(idle_temperature=10)
+    coord.entry.options.update(idle_mode="delta", idle_value=0, idle_temperature=17.5)
+    coord.async_apply_options()
+    assert coord.idle_mode == "delta"
+    assert coord.idle_value == 0
+    coord.async_apply_options()
+    assert coord.idle_value == 0
+    assert coord.destination_entity == "climate.dest"
+
+
+@pytest.mark.asyncio
+async def test_relative_idle_without_current_or_minimum_never_sends_invalid_target():
+    coord, hass = _build_coordinator(idle_temperature=0)
+    coord._idle_mode = "delta"
+    _configure_states(hass, {"climate.dest": _make_state(None, 25)})
+    await coord._async_evaluate()
+    assert coord.status == "destination_unavailable"
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_inconsistent_device_limits_block_commands():
+    coord, hass = _build_coordinator(idle_temperature=0, max_setpoint=20)
+    coord._idle_mode = "delta"
+    dest = _make_state(20.7, 25)
+    dest.attributes.update(min_temp=25, max_temp=35)
+    _configure_states(hass, {"climate.dest": dest})
+    await coord._async_evaluate()
+    assert coord.status == "destination_unavailable"
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_idle_minimum_clamp_is_visible_in_logs(caplog):
+    coord, hass = _build_coordinator(idle_temperature=30)
+    coord._idle_mode = "delta"
+    dest = _make_state(20.7, 25)
+    dest.attributes.update(min_temp=5, max_temp=35)
+    _configure_states(hass, {"climate.dest": dest})
+    await coord._async_evaluate()
+    assert coord.computed_setpoint == 5
+    assert "clamped target" in caplog.text
