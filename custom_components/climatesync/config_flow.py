@@ -245,9 +245,9 @@ def _control_schema(
             ): selector.selector(
                 {
                     "number": {
-                        "min": 0.1,
+                        "min": 0.001,
                         "max": 5.0,
-                        "step": 0.1,
+                        "step": 0.001,
                         "mode": "box",
                         "unit_of_measurement": "°C",
                     }
@@ -261,7 +261,7 @@ def _control_schema(
                     "number": {
                         "min": 0.0,
                         "max": 4.9,
-                        "step": 0.1,
+                        "step": 0.001,
                         "mode": "box",
                         "unit_of_measurement": "°C",
                     }

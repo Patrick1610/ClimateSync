@@ -380,3 +380,51 @@ async def test_missing_device_limits_block_numeric_step_without_saving(
     result = await flow.async_step_setback_target({"idle_value": 5})
     assert result["type"] == "form"
     assert result["errors"] == {"base": "destination_limits_unavailable"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [False, True])
+async def test_precise_positive_demand_thresholds_roundtrip(flow_module, options):
+    flow = _flow(flow_module, options)
+    form = await flow.async_step_control()
+    selectors = {
+        str(k): v.config["number"] for k, v in form["data_schema"].schema.items()
+    }
+    assert selectors["demand_activation_threshold"]["min"] == 0.001
+    assert selectors["demand_activation_threshold"]["step"] == 0.001
+    assert selectors["demand_deactivation_threshold"]["min"] == 0
+    assert selectors["demand_deactivation_threshold"]["step"] == 0.001
+    result = await flow.async_step_control(
+        {
+            "resync_interval_seconds": 30,
+            "min_change_threshold": 0.1,
+            "min_send_interval_seconds": 5,
+            "demand_activation_threshold": 0.001,
+            "demand_deactivation_threshold": 0,
+        }
+    )
+    assert result["type"] == "create_entry"
+    assert result["data"]["demand_activation_threshold"] == 0.001
+    assert result["data"]["demand_deactivation_threshold"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [False, True])
+@pytest.mark.parametrize("on,off", [(0, 0), (0.001, 0.001), (0.001, 0.002)])
+async def test_precise_demand_thresholds_reject_zero_start_and_bad_order(
+    flow_module, options, on, off
+):
+    flow = _flow(flow_module, options)
+    result = await flow.async_step_control(
+        {
+            "resync_interval_seconds": 30,
+            "min_change_threshold": 0.1,
+            "min_send_interval_seconds": 5,
+            "demand_activation_threshold": on,
+            "demand_deactivation_threshold": off,
+        }
+    )
+    assert result["type"] == "form"
+    assert result["errors"] == {
+        "demand_deactivation_threshold": "demand_threshold_order"
+    }

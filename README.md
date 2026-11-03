@@ -5,6 +5,18 @@
 
 > **Developed with Plugwise Emma in mind. Mix source climates (`current_temperature` and `temperature`) with numerical heating-demand delta sensors in °C. Destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.4.1
+
+Demand thresholds now accept 0.001 °C steps, with an activation minimum of
+0.001 °C. Defaults stay at 0.3 °C activation / 0.1 °C deactivation. For precise
+external demand sensors, a small positive activation threshold and zero
+deactivation can distinguish a tiny active request from zero source demand.
+For example, a 0.030 °C source delta is active with a 0.001 °C threshold, yet
+rounds a 20.3 °C destination reading back to a 20.3 °C target. With no source
+demand, the configured fixed or relative idle policy applies. A target equal
+to current temperature does not guarantee zero device heating power.
+No automatic change to existing thresholds, sources, or idle settings.
+
 ## Release 1.4.0
 
 Choose **Setback target** (fixed idle temperature) or **Setback delta**

@@ -1998,3 +1998,70 @@ async def test_idle_minimum_clamp_is_visible_in_logs(caplog):
     await coord._async_evaluate()
     assert coord.computed_setpoint == 5
     assert "clamped target" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_tiny_active_demand_can_round_to_zero_emma_delta_but_zero_source_uses_idle():
+    coord, hass = _build_coordinator(
+        source_entities=[],
+        delta_source_entities=["sensor.pi_delta"],
+        idle_temperature=10,
+        demand_activation_threshold=0.001,
+        demand_deactivation_threshold=0,
+    )
+    source = _delta_state("0")
+    dest = _make_state(20.3, 10)
+    _configure_states(hass, {"sensor.pi_delta": source, "climate.dest": dest})
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert not coord.demand_active
+    assert coord.computed_setpoint == 10
+    hass.services.async_call.assert_not_called()
+
+    # 1% normalized room power * 0.03. Keep it positive internally.
+    source.state = "0.030"
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert coord.demand_active
+    assert coord.primary_demand_active
+    assert coord.raw_setpoint == pytest.approx(20.33)
+    assert coord.computed_setpoint == 20.3
+    assert hass.services.async_call.call_args.args[2]["temperature"] == 20.3
+
+    # Larger requests still modulate normally.
+    source.state = "0.300"
+    dest.attributes["temperature"] = 20.3
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert coord.computed_setpoint == 20.6
+
+    # Fully zero means withdraw to idle, not target=current.
+    source.state = "0"
+    dest.attributes["temperature"] = 20.6
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert not coord.demand_active
+    assert not coord.primary_demand_active
+    assert coord.computed_setpoint == 10
+    assert hass.services.async_call.call_args.args[2]["temperature"] == 10
+
+
+@pytest.mark.asyncio
+async def test_millidegree_threshold_does_not_activate_from_zero_after_restart():
+    coord, hass = _build_coordinator(
+        source_entities=[],
+        delta_source_entities=["sensor.pi_delta"],
+        idle_temperature=10,
+        demand_activation_threshold=0.001,
+        demand_deactivation_threshold=0,
+    )
+    source = _delta_state("0")
+    _configure_states(
+        hass, {"sensor.pi_delta": source, "climate.dest": _make_state(20.3, 10)}
+    )
+    for _ in range(3):
+        await coord._async_evaluate(bypass_rate_limit=True)
+        assert not coord.demand_active
+        assert coord.computed_setpoint == 10
+    source.state = "0.0005"
+    await coord._async_evaluate()
+    assert not coord.demand_active
+    source.state = "0.001"
+    await coord._async_evaluate(bypass_rate_limit=True)
+    assert coord.demand_active
