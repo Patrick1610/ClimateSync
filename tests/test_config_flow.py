@@ -394,6 +394,7 @@ async def test_precise_positive_demand_thresholds_roundtrip(flow_module, options
     assert selectors["demand_activation_threshold"]["step"] == 0.001
     assert selectors["demand_deactivation_threshold"]["min"] == 0
     assert selectors["demand_deactivation_threshold"]["step"] == 0.001
+    assert selectors["secondary_demand_threshold"]["unit_of_measurement"] == "°C"
     result = await flow.async_step_control(
         {
             "resync_interval_seconds": 30,
@@ -401,11 +402,13 @@ async def test_precise_positive_demand_thresholds_roundtrip(flow_module, options
             "min_send_interval_seconds": 5,
             "demand_activation_threshold": 0.001,
             "demand_deactivation_threshold": 0,
+            "secondary_demand_threshold": 0.7,
         }
     )
     assert result["type"] == "create_entry"
     assert result["data"]["demand_activation_threshold"] == 0.001
     assert result["data"]["demand_deactivation_threshold"] == 0
+    assert result["data"]["secondary_demand_threshold"] == 0.7
 
 
 @pytest.mark.asyncio

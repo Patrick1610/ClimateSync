@@ -27,6 +27,7 @@ from .const import (
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
+    CONF_SECONDARY_DEMAND_THRESHOLD,
     CONF_SOURCE_ENTITIES,
     DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
     DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    DEFAULT_SECONDARY_DEMAND_THRESHOLD,
     DESTINATION_TARGET_HIGH,
     DESTINATION_TARGET_LOW,
     DESTINATION_TARGET_TEMPERATURE,
@@ -209,6 +211,7 @@ def _control_schema(
     default_send_interval: int = DEFAULT_MIN_SEND_INTERVAL,
     default_demand_activation: float = DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
     default_demand_deactivation: float = DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
+    default_secondary_threshold: float = DEFAULT_SECONDARY_DEMAND_THRESHOLD,
 ) -> vol.Schema:
     """Return advanced control and hysteresis settings."""
     return vol.Schema(
@@ -261,6 +264,19 @@ def _control_schema(
                     "number": {
                         "min": 0.0,
                         "max": 4.9,
+                        "step": 0.001,
+                        "mode": "box",
+                        "unit_of_measurement": "°C",
+                    }
+                }
+            ),
+            vol.Required(
+                CONF_SECONDARY_DEMAND_THRESHOLD, default=default_secondary_threshold
+            ): selector.selector(
+                {
+                    "number": {
+                        "min": 0.0,
+                        "max": 5.0,
                         "step": 0.001,
                         "mode": "box",
                         "unit_of_measurement": "°C",
@@ -542,6 +558,9 @@ class ClimateSyncConfigFlow(_SetbackFlow, config_entries.ConfigFlow, domain=DOMA
                         CONF_DEMAND_DEACTIVATION_THRESHOLD: user_input[
                             CONF_DEMAND_DEACTIVATION_THRESHOLD
                         ],
+                        CONF_SECONDARY_DEMAND_THRESHOLD: user_input.get(
+                            CONF_SECONDARY_DEMAND_THRESHOLD, DEFAULT_SECONDARY_DEMAND_THRESHOLD
+                        ),
                         CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
                     },
                 )
@@ -726,6 +745,9 @@ class ClimateSyncOptionsFlow(_SetbackFlow, config_entries.OptionsFlow):
                         CONF_DEMAND_DEACTIVATION_THRESHOLD: user_input[
                             CONF_DEMAND_DEACTIVATION_THRESHOLD
                         ],
+                        CONF_SECONDARY_DEMAND_THRESHOLD: user_input.get(
+                            CONF_SECONDARY_DEMAND_THRESHOLD, DEFAULT_SECONDARY_DEMAND_THRESHOLD
+                        ),
                         CONF_MIN_SEND_INTERVAL: user_input[CONF_MIN_SEND_INTERVAL],
                     },
                 )
@@ -743,6 +765,9 @@ class ClimateSyncOptionsFlow(_SetbackFlow, config_entries.OptionsFlow):
                 default_demand_activation=self._get(
                     CONF_DEMAND_ACTIVATION_THRESHOLD,
                     DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
+                ),
+                default_secondary_threshold=self._get(
+                    CONF_SECONDARY_DEMAND_THRESHOLD, DEFAULT_SECONDARY_DEMAND_THRESHOLD
                 ),
                 default_demand_deactivation=self._get(
                     CONF_DEMAND_DEACTIVATION_THRESHOLD,

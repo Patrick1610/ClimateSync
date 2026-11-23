@@ -2065,3 +2065,67 @@ async def test_millidegree_threshold_does_not_activate_from_zero_after_restart()
     source.state = "0.001"
     await coord._async_evaluate(bypass_rate_limit=True)
     assert coord.demand_active
+
+
+@pytest.mark.asyncio
+async def test_secondary_threshold_selects_demand_without_feeding_back_into_primary():
+    primary = "sensor.primary"
+    secondary = "sensor.secondary"
+    coord, hass = _build_coordinator(
+        source_entities=[],
+        delta_source_entities=[primary, secondary],
+        primary_source_entities=[primary],
+        demand_activation_threshold=0.1,
+        demand_deactivation_threshold=0.0,
+    )
+    coord.entry.options["secondary_demand_threshold"] = 0.7
+    coord.async_apply_options()
+    states = {"climate.dest": _make_state(20.0, 20.0)}
+    _configure_states(hass, states)
+
+    for p, s, expected, winner, primary_active in [
+        ("0.5", "0.699", 0.5, primary, True),
+        ("0.1", "0.7", 0.7, secondary, True),
+        ("0", "0.9", 0.9, secondary, False),
+        ("0", "0.699", 0.0, None, False),
+        ("1.2", "0.9", 1.2, primary, True),
+        ("unavailable", "0.7", 0.7, secondary, False),
+        ("0.5", "unknown", 0.5, primary, True),
+    ]:
+        states[primary] = _delta_state(p)
+        states[secondary] = _delta_state(s)
+        await coord._async_evaluate()
+        assert coord.selected_delta == expected
+        assert coord.selected_source == winner
+        assert coord.demand_active is bool(expected)
+        assert coord.primary_demand_active is primary_active
+        assert coord.raw_setpoint == (20 + expected if expected else coord.idle_temperature)
+    assert coord.secondary_delta_max == 0
+
+    coord.entry.options.pop("secondary_demand_threshold")
+    coord.async_apply_options()
+    states[secondary] = _delta_state("0.699")
+    await coord._async_evaluate()
+    assert coord.delta_max == coord.selected_delta == 0.699
+    assert coord.selected_source == secondary
+
+
+@pytest.mark.asyncio
+async def test_secondary_climate_exact_threshold_survives_float_subtraction():
+    coord, hass = _build_coordinator(
+        source_entities=["climate.primary", "climate.secondary"],
+        primary_source_entities=["climate.primary"],
+    )
+    coord.entry.options["secondary_demand_threshold"] = 0.7
+    coord.async_apply_options()
+    _configure_states(
+        hass,
+        {
+            "climate.primary": _make_state(20.0, 20.0),
+            "climate.secondary": _make_state(20.0, 20.7),
+            "climate.dest": _make_state(20.0, 20.0),
+        },
+    )
+    await coord._async_evaluate()
+    assert coord.selected_source == "climate.secondary"
+    assert coord.computed_setpoint == 20.7

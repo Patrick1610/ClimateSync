@@ -5,6 +5,14 @@
 
 > **Developed with Plugwise Emma in mind. Mix source climates (`current_temperature` and `temperature`) with numerical heating-demand delta sensors in °C. Destinations may expose either a single `temperature` target or a `target_temp_low` / `target_temp_high` range.**
 
+## Release 1.5.0
+
+An optional minimum secondary demand delta lets primary sources drive the destination
+when secondary demand is below the configured floor. Once a secondary source reaches
+the floor, it can win the maximum, even without a primary request. A floor of 0 °C
+keeps the previous behavior and is the default for existing installations. The primary
+demand signal remains independent. Diagnostics show the raw maximum and the selected delta.
+
 ## Release 1.4.1
 
 Demand thresholds now accept 0.001 °C steps, with an activation minimum of
@@ -179,9 +187,8 @@ source identities or their existing primary/secondary role just because labels
 changed. This applies to both climate and delta-sensor sources.
 
 Select the subset of sources (climates and/or delta sensors) that may enable other rooms to piggyback on
-an existing heating run. General destination control still uses **all** sources.
-A secondary room can therefore start heating when it falls below its own target,
-but it does not turn on `Primary Heating Demand Active`.
+an existing heating run. A secondary source can drive the destination when its delta reaches the configured
+secondary floor and wins the maximum. It does not turn on `Primary Heating Demand Active`.
 
 Existing installations migrate with every existing source selected as primary,
 so the upgrade does not silently narrow their demand scope.
@@ -216,6 +223,7 @@ that is unavailable it reports destination unavailable without sending an invali
 | Minimum destination change | 0.2 °C | Send a changed destination setpoint when the difference reaches this minimum. It does not determine demand state. |
 | Heating-demand activation threshold | 0.3 °C | Delta required to switch either demand scope on. |
 | Heating-demand deactivation threshold | 0.1 °C | Delta at or below which an active demand scope switches off. Must be lower than activation. |
+| Minimum secondary demand | 0 °C | Secondary deltas below this inclusive floor are ignored for destination control. |
 | Minimum send interval | 10 s | At most one destination service call per this many seconds. |
 
 ### Options Flow — reconfigure everything via the settings gear
@@ -270,9 +278,10 @@ If no usable source remains:
 
 delta_max = max(all room deltas)
 
-If demand is inactive and delta_max >= demand_activation_threshold:
+selected_delta = max(primary deltas and secondary deltas at or above their floor)
+If demand is inactive and selected_delta >= demand_activation_threshold:
     demand becomes active
-If demand is active and delta_max <= demand_deactivation_threshold:
+If demand is active and selected_delta <= demand_deactivation_threshold:
     demand becomes inactive
 
 primary_delta_max = max(deltas of configured primary sources)
@@ -282,9 +291,9 @@ primary_delta_max to calculate primary_demand_active
 If demand is inactive:
     setpoint_raw = idle_value if idle_mode == target else destination_current_temperature - idle_value
 Else:
-    setpoint_raw = destination_current_temperature + delta_max
+    setpoint_raw = destination_current_temperature + selected_delta
     # The destination target is set to its own current temperature
-    # plus the largest demand across all source rooms. This means the
+    # plus the largest eligible source demand. This means the
     # destination "feels" the same heating gap as the hardest-working
     # room, which is critical for OpenTherm controllers like the
     # Plugwise Emma that modulate boiler output based on their own
@@ -353,7 +362,7 @@ All entities are attached to a **ClimateSync** device. Sensors (setpoint, deltas
 
 #### Heating Demand Active — `binary_sensor.climatesync_heating_demand_active`
 
-Logical regulation demand across **all** configured sources. It switches on at
+Logical regulation demand based on the selected delta after applying the secondary floor. It switches on at
 the configured activation threshold and remains on until the maximum delta
 reaches the configured deactivation threshold. It means ClimateSync has a
 qualified heating request; it does not prove that the boiler is physically
@@ -400,7 +409,9 @@ thresholds, source list, and source-health diagnostics as attributes.
 | Attribute | Description |
 |---|---|
 | `room_deltas` | Map of `{entity_id: delta}` for all rooms |
-| `leading_room` | Entity id of the room with the highest delta |
+| `leading_room` | Entity id of the source with the highest raw delta |
+| `selected_delta`, `selected_source` | Highest eligible delta and source used for the setpoint calculation |
+| `secondary_delta_max`, `secondary_demand_threshold` | Raw secondary maximum and its configured floor |
 | `usable_source_count` | Number of sources that can safely participate |
 | `degraded_source_entities` | Unavailable or incomplete sources ignored for demand |
 | `inactive_source_entities` | `off` sources with a valid measurement and zero demand |

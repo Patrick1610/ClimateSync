@@ -56,6 +56,10 @@ async def test_config_entry_diagnostics_are_complete_and_serialisable() -> None:
         resync_interval=60,
         min_change_threshold=0.5,
         min_send_interval=10,
+        secondary_demand_threshold=0.7,
+        secondary_delta_max=0.0,
+        selected_delta=0.8,
+        selected_source="climate.living_room",
         demand_activation_threshold=0.5,
         demand_deactivation_threshold=0.1,
         room_deltas={

@@ -95,6 +95,8 @@ class HeatingDemandActiveBinarySensor(_ClimateSyncBaseBinarySensor):
             "scope": "all_sources",
             "delta_max": round(coord.delta_max, 2),
             "leading_source": coord.leading_room,
+            "selected_delta": coord.selected_delta,
+            "selected_source": coord.selected_source,
             "activation_threshold": coord.demand_activation_threshold,
             "deactivation_threshold": coord.demand_deactivation_threshold,
             "source_entities": list(coord.source_entities),
@@ -127,6 +129,7 @@ class PrimaryHeatingDemandActiveBinarySensor(_ClimateSyncBaseBinarySensor):
         return {
             "scope": "primary_sources",
             "delta_max": round(coord.primary_delta_max, 2),
+            "delta_max_unrounded": coord.primary_delta_max,
             "leading_source": coord.primary_leading_room,
             "activation_threshold": coord.demand_activation_threshold,
             "deactivation_threshold": coord.demand_deactivation_threshold,

@@ -40,6 +40,7 @@ def _coordinator_diagnostics(
             "resync_interval_seconds": coordinator.resync_interval,
             "minimum_change_threshold": coordinator.min_change_threshold,
             "minimum_send_interval_seconds": coordinator.min_send_interval,
+            "secondary_demand_threshold": coordinator.secondary_demand_threshold,
             "demand_activation_threshold": coordinator.demand_activation_threshold,
             "demand_deactivation_threshold": coordinator.demand_deactivation_threshold,
         },
@@ -67,12 +68,15 @@ def _coordinator_diagnostics(
                 coordinator.primary_inactive_source_entities
             ),
         },
+        "secondary_sources": {"delta_max": coordinator.secondary_delta_max},
         "destination": {
             "current_temperature": coordinator.destination_current_temperature,
             "current_target": coordinator.destination_current_target,
             "paired_target": coordinator.destination_paired_target,
         },
         "setpoint": {
+            "selected_delta": coordinator.selected_delta,
+            "selected_source": coordinator.selected_source,
             "idle_setpoint": coordinator.idle_setpoint,
             "idle_setpoint_stage": "before_rounding_and_limits",
             "idle_fallback_active": coordinator.idle_fallback_active,

@@ -31,6 +31,7 @@ from .const import (
     CONF_RESYNC_INTERVAL,
     CONF_ROUNDING_DIRECTION,
     CONF_ROUNDING_MODE,
+    CONF_SECONDARY_DEMAND_THRESHOLD,
     CONF_SOURCE_ENTITIES,
     DEFAULT_DEMAND_ACTIVATION_THRESHOLD,
     DEFAULT_DEMAND_DEACTIVATION_THRESHOLD,
@@ -42,6 +43,7 @@ from .const import (
     DEFAULT_RESYNC_INTERVAL,
     DEFAULT_ROUNDING_DIRECTION,
     DEFAULT_ROUNDING_MODE,
+    DEFAULT_SECONDARY_DEMAND_THRESHOLD,
     DESTINATION_TARGET_HIGH,
     DESTINATION_TARGET_LOW,
     DESTINATION_TARGETS,
@@ -192,6 +194,11 @@ class ClimateSyncCoordinator:
             DEFAULT_DEMAND_DEACTIVATION_THRESHOLD
         )
 
+        self.secondary_demand_threshold = DEFAULT_SECONDARY_DEMAND_THRESHOLD
+        self.secondary_delta_max = 0.0
+        self.selected_delta = 0.0
+        self.selected_source: str | None = None
+
         # Per-room deltas  {entity_id: {"delta": float, "current": float|None, "target": float|None}}
         self.room_deltas: dict[str, dict[str, Any]] = {}
         self.delta_max: float = 0.0
@@ -339,6 +346,12 @@ class ClimateSyncCoordinator:
             opts.get(
                 CONF_MIN_SEND_INTERVAL,
                 data.get(CONF_MIN_SEND_INTERVAL, DEFAULT_MIN_SEND_INTERVAL),
+            )
+        )
+        self.secondary_demand_threshold = float(
+            opts.get(
+                CONF_SECONDARY_DEMAND_THRESHOLD,
+                data.get(CONF_SECONDARY_DEMAND_THRESHOLD, DEFAULT_SECONDARY_DEMAND_THRESHOLD),
             )
         )
         self._demand_activation_threshold = float(
@@ -624,13 +637,34 @@ class ClimateSyncCoordinator:
                 self.primary_delta_max = row["delta"]
                 self.primary_leading_room = entity_id
 
+        self.secondary_delta_max = 0.0
+        secondary_leading_source = None
+        for entity_id, row in self.room_deltas.items():
+            if entity_id not in primary_rows and row["delta"] > self.secondary_delta_max:
+                self.secondary_delta_max = row["delta"]
+                secondary_leading_source = entity_id
+
+        if self.secondary_demand_threshold == 0:
+            # Preserve the original maximum and source ordering for existing entries.
+            self.selected_delta = max_delta
+            self.selected_source = leading
+        elif (
+            self.secondary_delta_max + _DEMAND_EPSILON >= self.secondary_demand_threshold
+            and self.secondary_delta_max > self.primary_delta_max
+        ):
+            self.selected_delta = self.secondary_delta_max
+            self.selected_source = secondary_leading_source
+        else:
+            self.selected_delta = self.primary_delta_max
+            self.selected_source = self.primary_leading_room
+
         # Apply demand hysteresis before setpoint calculation. A small positive
         # source delta is often measurement or rounding noise and must not turn
         # the central heat source on. Once demand is active, keep it active
         # until the lower deactivation threshold is reached.
         self.demand_active = _next_demand_state(
             self.demand_active,
-            max_delta,
+            self.selected_delta,
             self._demand_activation_threshold,
             self._demand_deactivation_threshold,
         )
@@ -659,7 +693,7 @@ class ClimateSyncCoordinator:
         if not self.demand_active or self.destination_current_temperature is None:
             setpoint_raw = self.idle_setpoint
         else:
-            setpoint_raw = self.destination_current_temperature + max_delta
+            setpoint_raw = self.destination_current_temperature + self.selected_delta
 
         if setpoint_raw is None or not math.isfinite(setpoint_raw):
             self.status = STATUS_DESTINATION_UNAVAILABLE
